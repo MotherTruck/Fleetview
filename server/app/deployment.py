@@ -1,7 +1,9 @@
 """Approval-gated patch jobs and immutable uploaded installer bundles."""
 import hashlib
+import json
 import re
 from datetime import timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -17,8 +19,26 @@ from .models import (AccountAudit, CustomPackage, CustomPackageFile, Device, Job
 router = APIRouter()
 MAX_FILE = 8 * 1024 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
+MAX_COMMAND = 4096
 SAFE_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,199}")
 SAFE_PACKAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+:-]{0,254}")
+INSTALL_DIR = Path("/opt/fleetview-install")
+_agent_manifest_cache = None
+
+
+def published_agent_manifest():
+    """The version/checksums of the agent binaries baked into this server's
+    own image at build time (see server/Dockerfile's agent-build stage).
+    Read once and cached: these files never change for the lifetime of a
+    running container."""
+    global _agent_manifest_cache
+    if _agent_manifest_cache is None:
+        path = INSTALL_DIR / "agent-bin" / "manifest.json"
+        try:
+            _agent_manifest_cache = json.loads(path.read_text())
+        except (OSError, ValueError):
+            _agent_manifest_cache = False
+    return _agent_manifest_cache or None
 
 
 def patch_key(item):
@@ -34,6 +54,22 @@ def supports_deployment(device):
         return tuple(int(part) for part in (device.agent_version or "").split(".")[:2]) >= (0, 14)
     except ValueError:
         return False
+
+
+def supports_run_command(device):
+    try:
+        return tuple(int(part) for part in (device.agent_version or "").split(".")[:2]) >= (0, 16)
+    except ValueError:
+        return False
+
+
+# A device below 0.16.0 has no UPGRADE_AGENT case in its job-dispatch
+# switch at all, so it cannot be remotely upgraded to the version that
+# would let it understand this job type in the first place; that one jump
+# still needs scripts/upgrade-agent-in-place.sh (or .ps1) run by hand.
+# supports_run_command's threshold is reused here since both job types
+# shipped in the same 0.16.0 release.
+supports_agent_upgrade = supports_run_command
 
 
 def pending_patches(db, device):
@@ -276,3 +312,63 @@ def agent_bundle_file(job_id: str, file_id: str, x_device_id: str = Header(),
     if not item or item.package_id != package.id:
         raise HTTPException(404, "File not found")
     return Response(content=item.content, media_type="application/octet-stream")
+
+
+class RunCommandInput(BaseModel):
+    command: str = Field(min_length=1, max_length=MAX_COMMAND)
+    confirmed: bool
+
+
+@router.post("/api/v1/admin/devices/{device_id}/run-command", dependencies=[Depends(require_admin)], status_code=201)
+def run_command(device_id: str, payload: RunCommandInput, user=Depends(require_admin), db: Session = Depends(get_db)):
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if not payload.confirmed:
+        raise HTTPException(400, "Command execution requires explicit confirmation")
+    if not supports_run_command(device):
+        raise HTTPException(409, "Upgrade this device's existing agent to 0.16.0 and run a patch scan first")
+    job = Job(device_id=device_id, type="RUN_COMMAND", options={"command": payload.command, "confirmed": True})
+    db.add(job)
+    db.add(AccountAudit(actor=user.username if user else "bootstrap", action="run_command", target=device.hostname,
+                        details=payload.command[:500]))
+    db.commit()
+    return {"id": job.id, "device_id": device_id}
+
+
+@router.get("/api/v1/admin/agent-version", dependencies=[Depends(require_viewer)])
+def agent_version(db: Session = Depends(get_db)):
+    manifest = published_agent_manifest()
+    if manifest is None:
+        raise HTTPException(404, "No published agent binaries are available on this server")
+    return manifest
+
+
+@router.post("/api/v1/admin/devices/{device_id}/upgrade-agent", dependencies=[Depends(require_admin)], status_code=201)
+def upgrade_agent(device_id: str, db: Session = Depends(get_db)):
+    device = db.scalar(select(Device).where(Device.id == device_id).with_for_update())
+    if not device:
+        raise HTTPException(404, "Device not found")
+    manifest = published_agent_manifest()
+    if manifest is None:
+        raise HTTPException(409, "This server has no published agent binaries built in")
+    if device.platform not in ("linux", "windows"):
+        raise HTTPException(400, "Agent upgrade is unsupported on this device's platform")
+    if not supports_agent_upgrade(device):
+        raise HTTPException(409, "Upgrade this device's existing agent to 0.16.0 with "
+                            "scripts/upgrade-agent-in-place.sh (or .ps1) first; remote upgrades "
+                            "work from there onward")
+    if device.agent_version == manifest["version"]:
+        raise HTTPException(409, f"This device already reports agent version {manifest['version']}")
+    if db.scalar(select(Job.id).where(Job.device_id == device_id, Job.type == "UPGRADE_AGENT",
+                                   Job.status.in_(["pending", "running"]))):
+        raise HTTPException(409, "An agent upgrade is already pending or running")
+    platform_key = "windows_amd64" if device.platform == "windows" else "linux_amd64"
+    asset = manifest.get(platform_key)
+    if not asset:
+        raise HTTPException(409, f"No published agent binary for {platform_key}")
+    job = Job(device_id=device_id, type="UPGRADE_AGENT",
+             options={"version": manifest["version"], "sha256": asset["sha256"], "url": asset["path"]})
+    db.add(job)
+    db.commit()
+    return {"id": job.id, "device_id": device_id, "version": manifest["version"]}

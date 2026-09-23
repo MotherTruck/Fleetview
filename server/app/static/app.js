@@ -23,6 +23,7 @@ const state = {
   patchApprovals: {},
   patchSchedules: {},
   editingPackageId: null,
+  publishedAgentVersion: null,
 };
 
 const ACCENT_PRESETS = [
@@ -342,6 +343,25 @@ function loadAgentSettingsForm() {
   $("#dockerInventoryEnabled").checked = settings.docker_inventory_enabled !== false;
   $("#uninstallCodeRequired").checked = settings.uninstall_code_required === true;
   $("#uninstallCode").value = "";
+  renderAgentUpgradeStatus(device);
+}
+
+function renderAgentUpgradeStatus(device) {
+  const section = $("#agentUpgradeSection");
+  if (!section) return;
+  const manifest = state.publishedAgentVersion;
+  section.hidden = state.user?.role !== "admin" || !manifest;
+  if (!manifest || !device) { $("#upgradeAgentButton").hidden = true; $("#upgradeAgentStatus").textContent = ""; return; }
+  const supportedPlatform = device.platform === "linux" || device.platform === "windows";
+  const versionParts = String(device.agent_version || "").split(".").map(Number);
+  const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
+  const upToDate = device.agent_version === manifest.version;
+  const available = supportedPlatform && bootstrapped && !upToDate;
+  $("#upgradeAgentButton").hidden = !available;
+  $("#upgradeAgentStatus").textContent = !supportedPlatform ? "Remote upgrade is unsupported on this device's platform."
+    : !bootstrapped ? "Upgrade this device to 0.16.0 with scripts/upgrade-agent-in-place.sh (or .ps1) first; remote upgrades work from there onward."
+    : upToDate ? `This device already reports the published version (${manifest.version}).`
+    : `Version ${manifest.version} is published; this device reports ${device.agent_version || "an unknown version"}.`;
 }
 
 function shellQuote(value) {
@@ -552,7 +572,7 @@ function renderInventory() {
   }).join("") : '<div class="empty">No devices match this view.</div>';
 }
 
-const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action" };
+const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade" };
 
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
@@ -589,6 +609,8 @@ function updateDeploySubmitState() {
   const count = state.deploySelected.size;
   $("#deploySubmit").disabled = count === 0;
   $("#deploySelectionCount").textContent = count === 0 ? "No devices selected." : `${count} device${count === 1 ? "" : "s"} selected.`;
+  const runCommandSubmit = $("#runCommandSubmit");
+  if (runCommandSubmit) runCommandSubmit.disabled = count === 0 || state.user?.role !== "admin";
 }
 
 function renderDeployJobs() {
@@ -1267,6 +1289,22 @@ $("#scanScheduleForm").addEventListener("submit", async event => {
     showNotice("Scan schedule saved. Disabling does not cancel jobs already queued.");
   } catch (error) { showNotice(error.message, true); }
 });
+$("#upgradeAgentButton").addEventListener("click", async () => {
+  const id = $("#agentSettingsDevice").value;
+  const device = state.devices.find(item => item.id === id);
+  const manifest = state.publishedAgentVersion;
+  if (!id || !device || !manifest) return;
+  if (!confirm(`Upgrade the agent on ${device.display_name || device.hostname} from ${device.agent_version || "an unknown version"} to ${manifest.version}?\n\nThe agent downloads and verifies the new binary, then replaces itself. On Linux this happens in place with no restart; on Windows the service restarts briefly.`)) return;
+  const button = $("#upgradeAgentButton");
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${id}/upgrade-agent`, { method: "POST" });
+    showNotice(`Agent upgrade to ${manifest.version} queued for ${device.display_name || device.hostname}.`);
+    setPage("patching");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { button.disabled = false; }
+});
 $("#trendFilters").addEventListener("submit", async event => {
   event.preventDefault();
   try {
@@ -1290,9 +1328,10 @@ async function refresh() {
       api("/api/v1/admin/settings"),
       api("/api/v1/admin/packages"),
       state.user.role === "admin" ? api("/api/v1/admin/custom-packages") : Promise.resolve([]),
+      state.user.role === "admin" ? api("/api/v1/admin/agent-version").catch(() => null) : Promise.resolve(null),
     ]);
     if (!state.user || generation !== state.authGeneration) return;
-    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages] = results;
+    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion] = results;
     showNotice(state.devices.length ? "Fleet data is current." : "Server is ready. Enroll the first agent to populate the fleet.");
     $("#refreshState").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     render();
@@ -1449,6 +1488,30 @@ $("#deployForm").addEventListener("submit", async (event) => {
   } finally {
     updateDeploySubmitState();
   }
+});
+$("#runCommandForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const command = $("#runCommandText").value.trim();
+  const deviceIds = [...state.deploySelected];
+  if (!command || deviceIds.length === 0) return;
+  const names = deviceIds.map((id) => {
+    const device = state.devices.find((item) => item.id === id);
+    return device ? (device.display_name || device.hostname) : id;
+  });
+  if (!confirm(`Run this command on ${deviceIds.length} device${deviceIds.length === 1 ? "" : "s"}?\n\n${names.join(", ")}\n\nCommand:\n${command}\n\nThis runs once with the agent service's privileges and cannot be interrupted once an agent claims it.`)) return;
+  const button = $("#runCommandSubmit");
+  button.disabled = true;
+  try {
+    const outcomes = await Promise.allSettled(deviceIds.map(id => api(`/api/v1/admin/devices/${id}/run-command`, {
+      method: "POST", body: JSON.stringify({ command, confirmed: true }),
+    })));
+    const failed = outcomes.filter(result => result.status === "rejected");
+    showNotice(`Queued on ${deviceIds.length - failed.length} device(s).${failed.length ? ` ${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
+    $("#runCommandText").value = "";
+    setPage("patching");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { updateDeploySubmitState(); }
 });
 $("#customPackageForm").addEventListener("submit", async event => {
   event.preventDefault();

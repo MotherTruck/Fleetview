@@ -22,15 +22,27 @@ import (
 	"fleetview-agent/internal/vulnerability"
 )
 
-const version = "0.15.0"
+// version is overridable at build time via -ldflags "-X main.version=...",
+// which the server's Docker image build uses so published agent binaries
+// self-report the exact version they were built as.
+var version = "0.16.0"
+
 const serviceName = "fleetview-agent"
 
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to agent configuration")
 	serviceAction := flag.String("service", "", "service control action: install, uninstall, start, stop (Windows only)")
 	uninstallCode := flag.String("uninstall-code", "", "managed-uninstall code for -service uninstall; prompted for if omitted and one is configured")
+	finishUpgradeTarget := flag.String("finish-upgrade", "", "internal: complete a staged agent upgrade by replacing the binary at this path (Windows only; invoked by the agent itself, not meant to be run by hand)")
 	flag.Parse()
 	logger := log.New(os.Stdout, "fleetview-agent: ", log.LstdFlags|log.LUTC)
+
+	if *finishUpgradeTarget != "" {
+		if err := finishUpgrade(*finishUpgradeTarget); err != nil {
+			logger.Fatal(err)
+		}
+		return
+	}
 
 	if *serviceAction != "" {
 		if err := controlService(*serviceAction, *configPath, *uninstallCode); err != nil {
@@ -139,8 +151,18 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 				logger.Printf("metrics report failed: %v", metricsErr)
 			}
 		case <-jobTicker.C:
-			if err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled); err != nil {
+			stagedUpgrade, err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled)
+			if err != nil {
 				logger.Printf("job poll failed: %v", err)
+			}
+			if len(stagedUpgrade) > 0 {
+				logger.Print("applying staged agent upgrade")
+				if applyErr := applyUpgrade(stagedUpgrade); applyErr != nil {
+					// A Linux success never reaches here (the process image is
+					// replaced in place); a Windows success also doesn't, since
+					// the detached helper takes over and this process exits.
+					logger.Printf("apply upgrade failed: %v", applyErr)
+				}
 			}
 		case <-settingsTicker.C:
 			remoteSettings, settingsErr := api.AgentSettings(ctx)
@@ -183,13 +205,19 @@ func scanAndReport(ctx context.Context, api *client.Client, manager packages.Man
 	return api.Report(ctx, report)
 }
 
-func handleNextJob(ctx context.Context, api *client.Client, manager packages.Manager, logger *log.Logger, dockerInventoryEnabled bool) error {
+// handleNextJob returns a non-nil stagedUpgrade when an UPGRADE_AGENT job
+// was verified and reported successfully; the caller then applies it
+// (replacing/restarting the running agent) once this function has
+// returned, so the job-completion report is never at risk of being lost
+// to the process replacement it triggers.
+func handleNextJob(ctx context.Context, api *client.Client, manager packages.Manager, logger *log.Logger, dockerInventoryEnabled bool) (stagedUpgrade []byte, err error) {
 	job, err := api.NextJob(ctx)
 	if err != nil || job == nil {
-		return err
+		return nil, err
 	}
 	logger.Printf("running job %s (%s)", job.ID, job.Type)
 	result := model.JobResult{Status: "succeeded", Output: "Job completed"}
+	var stageErr error
 	switch job.Type {
 	case "SCAN_DEVICE":
 		err = scanAndReport(ctx, api, manager, dockerInventoryEnabled)
@@ -301,6 +329,34 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 				logger.Printf("post-uninstall scan failed: %v", scanErr)
 			}
 		}
+	case "RUN_COMMAND":
+		if confirmed, _ := job.Options["confirmed"].(bool); !confirmed {
+			err = fmt.Errorf("command execution requires explicit confirmation")
+			break
+		}
+		command, _ := job.Options["command"].(string)
+		if strings.TrimSpace(command) == "" {
+			err = fmt.Errorf("server job did not include a command")
+			break
+		}
+		var output string
+		var exitCode int
+		output, exitCode, err = runCommand(ctx, command)
+		result.Output = output
+		result.ExitCode = &exitCode
+	case "UPGRADE_AGENT":
+		downloadURL, _ := job.Options["url"].(string)
+		expectedSHA, _ := job.Options["sha256"].(string)
+		newVersion, _ := job.Options["version"].(string)
+		if downloadURL == "" || expectedSHA == "" || newVersion == "" {
+			err = fmt.Errorf("server job did not include a valid upgrade manifest")
+			break
+		}
+		stagedUpgrade, stageErr = stageUpgrade(ctx, api, downloadURL, expectedSHA)
+		err = stageErr
+		if err == nil {
+			result.Output = fmt.Sprintf("Downloaded and verified agent %s; applying now", newVersion)
+		}
 	case "INSTALL_PACKAGE":
 		packageName, _ := job.Options["package"].(string)
 		if strings.TrimSpace(packageName) == "" {
@@ -325,5 +381,9 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 		result.Status = "failed"
 		result.Error = err.Error()
 	}
-	return api.CompleteJob(ctx, job.ID, result)
+	completeErr := api.CompleteJob(ctx, job.ID, result)
+	if completeErr != nil || err != nil || len(stagedUpgrade) == 0 {
+		return nil, completeErr
+	}
+	return stagedUpgrade, nil
 }

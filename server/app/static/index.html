@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>FleetView</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.15.1">
+    <link rel="stylesheet" href="/static/styles.css?v=0.16.0">
   </head>
   <body class="signed-out">
     <header>
@@ -147,6 +147,17 @@
           </div>
         </section>
 
+        <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">DIAGNOSTICS</p><h2>Run a command</h2></div></div>
+          <form id="runCommandForm" class="agent-settings-form">
+            <label>Command (runs with the agent service's privileges)
+              <textarea id="runCommandText" required maxlength="4096" rows="3" placeholder="e.g. systemctl status docker"></textarea>
+            </label>
+            <p class="form-note">Runs once on each selected device via Bash (Linux) or PowerShell (Windows) and reports back when it finishes — there is no live/interactive shell. Requires a native agent on 0.16.0 or later. Admin only.</p>
+            <div class="settings-actions"><button type="submit" id="runCommandSubmit" disabled>Run on selected devices</button></div>
+          </form>
+        </section>
+
         <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">SOFTWARE DEPLOYMENT</p><h2>Deploy by name</h2></div></div>
           <form id="deployForm" class="agent-settings-form">
@@ -260,6 +271,10 @@
             <button id="saveScanSchedule" type="submit">Save scan schedule</button>
             <p id="scanScheduleStatus" class="form-note"></p>
           </form>
+          <div id="agentUpgradeSection" class="settings-grid" hidden>
+            <div class="settings-actions"><button id="upgradeAgentButton" type="button" hidden>Upgrade agent</button></div>
+            <p id="upgradeAgentStatus" class="form-note"></p>
+          </div>
         </section>
 
         <section class="panel">
@@ -451,6 +466,6 @@ FLEETVIEW_PORT=8080</code></pre>
       <p id="detailFootnote" class="detail-footnote"></p>
     </dialog>
 
-    <script src="/static/app.js?v=0.15.1" defer></script>
+    <script src="/static/app.js?v=0.16.0" defer></script>
   </body>
 </html>

@@ -41,6 +41,10 @@ class DeploymentTests(unittest.TestCase):
                           agent_version="0.14.0", agent_token_hash=token_hash("arch-secret"),
                           available_updates=[{"package":"curl", "available_version":"2"},
                                              {"package":"vim", "available_version":"3"}]))
+            db.add(Device(id="new", hostname="fresh", platform="linux", package_manager="apt",
+                          agent_version="0.16.0", agent_token_hash=token_hash("new-secret")))
+            db.add(Device(id="winnew", hostname="winbox", platform="windows", package_manager="winget",
+                          agent_version="0.16.0", agent_token_hash=token_hash("win-secret")))
             db.commit()
         setup = self.client.post("/api/v1/auth/setup", json={
             "admin_token":"legacy-secret", "username":"admin", "password":"long-password-for-tests"})
@@ -126,6 +130,54 @@ class DeploymentTests(unittest.TestCase):
             json={"status":"succeeded", "output":"ok"}).status_code, 204)
         self.assertEqual(self.client.get(file_path, headers=auth).status_code, 404)
 
+    def test_run_command_requires_confirmation_and_agent_version(self):
+        old = self.client.post("/api/v1/admin/devices/dev/run-command", json={"command":"echo hi", "confirmed":True})
+        self.assertEqual(old.status_code, 409, old.text)
+        unconfirmed = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"echo hi", "confirmed":False})
+        self.assertEqual(unconfirmed.status_code, 400)
+        ok = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"echo hi", "confirmed":True})
+        self.assertEqual(ok.status_code, 201, ok.text)
+        with self.Session() as db:
+            job = db.get(Job, ok.json()["id"])
+            self.assertEqual(job.type, "RUN_COMMAND")
+            self.assertEqual(job.options["command"], "echo hi")
+            self.assertTrue(job.options["confirmed"])
+
+    def test_run_command_rejects_empty_and_oversized(self):
+        empty = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"", "confirmed":True})
+        self.assertEqual(empty.status_code, 422)
+        huge = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"x" * 5000, "confirmed":True})
+        self.assertEqual(huge.status_code, 422)
+
+    def test_upgrade_agent_gates_on_manifest_platform_and_version(self):
+        manifest = {"version":"0.17.0",
+                   "linux_amd64": {"sha256":"a" * 64, "path":"/install/agent-linux-amd64"},
+                   "windows_amd64": {"sha256":"b" * 64, "path":"/install/agent-windows-amd64.exe"}}
+        with patch("app.deployment.published_agent_manifest", return_value=None):
+            self.assertEqual(self.client.post("/api/v1/admin/devices/new/upgrade-agent").status_code, 409)
+        with patch("app.deployment.published_agent_manifest", return_value=manifest):
+            self.assertEqual(self.client.post("/api/v1/admin/devices/dev/upgrade-agent").status_code, 409)
+            same_version = self.client.post("/api/v1/admin/devices/new/upgrade-agent")
+            self.assertEqual(same_version.status_code, 201, same_version.text)
+            self.assertEqual(same_version.json()["version"], "0.17.0")
+            with self.Session() as db:
+                job = db.get(Job, same_version.json()["id"])
+                self.assertEqual(job.type, "UPGRADE_AGENT")
+                self.assertEqual(job.options, {"version":"0.17.0", "sha256":"a" * 64, "url":"/install/agent-linux-amd64"})
+            duplicate = self.client.post("/api/v1/admin/devices/new/upgrade-agent")
+            self.assertEqual(duplicate.status_code, 409)
+            windows_job = self.client.post("/api/v1/admin/devices/winnew/upgrade-agent")
+            self.assertEqual(windows_job.status_code, 201, windows_job.text)
+            with self.Session() as db:
+                job = db.get(Job, windows_job.json()["id"])
+                self.assertEqual(job.options["url"], "/install/agent-windows-amd64.exe")
+        with self.Session() as db:
+            db.get(Device, "new").agent_version = "0.17.0"
+            db.commit()
+        with patch("app.deployment.published_agent_manifest", return_value=manifest):
+            already = self.client.post("/api/v1/admin/devices/new/upgrade-agent")
+        self.assertEqual(already.status_code, 409)
+
     def test_viewer_cannot_approve_schedule_or_upload(self):
         created = self.client.post("/api/v1/admin/users", json={"username":"viewer", "password":"long-password-for-tests", "role":"viewer"})
         self.assertEqual(created.status_code, 201)
@@ -142,4 +194,6 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(viewer.put("/api/v1/admin/devices/dev/patch-schedule", json={"interval_hours":1}).status_code, 403)
         self.assertEqual(viewer.post("/api/v1/admin/custom-packages", data={"name":"Bad", "platform":"linux", "command":"true"},
                         files=[("files", ("install.sh", b"hello", "application/octet-stream"))]).status_code, 403)
+        self.assertEqual(viewer.post("/api/v1/admin/devices/new/run-command", json={"command":"echo hi", "confirmed":True}).status_code, 403)
+        self.assertEqual(viewer.post("/api/v1/admin/devices/new/upgrade-agent").status_code, 403)
         viewer.close()

@@ -159,6 +159,33 @@ func (c *Client) BundleFile(ctx context.Context, jobID, fileID string) ([]byte, 
 	return data, nil
 }
 
+// DownloadFile fetches a public, unauthenticated file such as a published
+// agent binary (the /install/ routes, same trust tier as the install
+// scripts they already serve). maxSize bounds the response to guard
+// against a misbehaving or compromised server exhausting memory/disk.
+func (c *Client) DownloadFile(ctx context.Context, path string, maxSize int64) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s returned %s", path, response.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxSize {
+		return nil, fmt.Errorf("download %s exceeded the maximum expected size", path)
+	}
+	return data, nil
+}
+
 func (c *Client) request(ctx context.Context, method, path string, payload, result interface{}, authenticated bool) error {
 	_, err := c.requestAllowNoContent(ctx, method, path, payload, result, authenticated)
 	return err

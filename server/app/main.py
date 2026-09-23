@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .auth import authenticate_agent, require_admin, require_operator, require_viewer
 from .accounts import router as accounts_router
-from .deployment import router as deployment_router, queue_scheduled_patch
+from .deployment import router as deployment_router, published_agent_manifest, queue_scheduled_patch
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .database import Base, engine, get_db
@@ -175,6 +175,30 @@ def linux_agent_source() -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Agent source bundle is not available")
     return FileResponse(path, media_type="application/gzip", filename="fleetview-agent-source.tar.gz")
+
+
+@app.get("/install/agent-version", include_in_schema=False)
+def agent_version_manifest() -> dict:
+    manifest = published_agent_manifest()
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="Published agent binaries are not available")
+    return manifest
+
+
+@app.get("/install/agent-linux-amd64", include_in_schema=False)
+def agent_binary_linux() -> FileResponse:
+    path = INSTALL_DIR / "agent-bin" / "linux-amd64" / "fleetview-agent"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Published Linux agent binary is not available")
+    return FileResponse(path, media_type="application/octet-stream", filename="fleetview-agent")
+
+
+@app.get("/install/agent-windows-amd64.exe", include_in_schema=False)
+def agent_binary_windows() -> FileResponse:
+    path = INSTALL_DIR / "agent-bin" / "windows-amd64" / "fleetview-agent.exe"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Published Windows agent binary is not available")
+    return FileResponse(path, media_type="application/octet-stream", filename="fleetview-agent.exe")
 
 
 @app.post("/api/v1/agent/enroll", response_model=EnrollResponse, status_code=201)
