@@ -1,4 +1,4 @@
-PROJECT_VERSION ?= 0.15.0
+PROJECT_VERSION ?= 0.15.1
 
 .PHONY: up down logs test package agent
 

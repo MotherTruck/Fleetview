@@ -352,6 +352,30 @@ function psQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+// navigator.clipboard requires a secure context (HTTPS or localhost); this
+// dashboard is commonly reached over plain HTTP on a LAN address, where that
+// API is unavailable entirely, so a hidden-textarea + execCommand fallback
+// is required for copy buttons to work there.
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("execCommand copy failed");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function tokenMetaText(fresh, status) {
   if (!fresh) return "";
   if (status === "active" && new Date(fresh.expires_at) > new Date()) {
@@ -1132,6 +1156,7 @@ function renderDeviceDetails() {
     $("#patchInterval").value = schedule?.interval_hours ?? 0;
     $("#patchScheduleInfo").textContent = schedule?.next_run_at ? `Next due: ${fullDate(schedule.next_run_at)}. Only currently approved patches will be queued.` : "Schedule disabled. Approved patches remain ready for manual deployment.";
     $("#deployApprovedPatches").disabled = state.user?.role === "viewer" || !approvals.some(item => item.approved && item.supported);
+    $("#approveAllPatches").disabled = state.user?.role === "viewer" || !approvals.some(item => !item.approved && item.supported);
     $("#patchScheduleForm").querySelector("button").disabled = state.user?.role === "viewer";
     $("#patchInterval").disabled = state.user?.role === "viewer";
     $("#detailFootnote").textContent = device.package_manager === "pacman"
@@ -1355,6 +1380,24 @@ $("#detailTableBody").addEventListener("click", async event => {
 $("#deployApprovedPatches").addEventListener("click", () => {
   if (state.detailDevice) queueUpdate(state.detailDevice.id);
 });
+$("#approveAllPatches").addEventListener("click", async () => {
+  const device = state.detailDevice;
+  if (!device) return;
+  const pending = (state.patchApprovals[device.id] || []).filter(item => !item.approved && item.supported);
+  if (!pending.length) return;
+  const button = $("#approveAllPatches");
+  button.disabled = true;
+  try {
+    const outcomes = await Promise.allSettled(pending.map(item => api(`/api/v1/admin/devices/${device.id}/patch-approvals`, {
+      method: "PUT", body: JSON.stringify({ package: item.key, available_version: item.available_version, approved: true }),
+    })));
+    const failed = outcomes.filter(result => result.status === "rejected");
+    state.patchApprovals[device.id] = await api(`/api/v1/admin/devices/${device.id}/patch-approvals`);
+    renderDeviceDetails();
+    showNotice(`Approved ${pending.length - failed.length} patch${pending.length - failed.length === 1 ? "" : "es"}.${failed.length ? ` ${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
+  } catch (error) { showNotice(error.message, true); }
+  finally { renderDeviceDetails(); }
+});
 $("#patchScheduleForm").addEventListener("submit", async event => {
   event.preventDefault();
   const device = state.detailDevice;
@@ -1559,13 +1602,13 @@ $("#enrollmentTokens").addEventListener("click", async (event) => {
 });
 $("#copyInstallCommand").addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText($("#installCommand").textContent);
+    await copyText($("#installCommand").textContent);
     showNotice("Installation command copied.");
   } catch { showNotice("Could not access the clipboard. Select and copy the command manually.", true); }
 });
 $("#copyWindowsInstallCommand").addEventListener("click", async () => {
   try {
-    await navigator.clipboard.writeText($("#windowsInstallCommand").textContent);
+    await copyText($("#windowsInstallCommand").textContent);
     showNotice("Installation command copied.");
   } catch { showNotice("Could not access the clipboard. Select and copy the command manually.", true); }
 });

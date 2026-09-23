@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>FleetView</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.15.0">
+    <link rel="stylesheet" href="/static/styles.css?v=0.15.1">
   </head>
   <body class="signed-out">
     <header>
@@ -439,7 +439,7 @@ FLEETVIEW_PORT=8080</code></pre>
         </table>
       </div>
       <div id="patchControls" class="panel-body" hidden>
-        <div class="settings-actions"><button id="deployApprovedPatches" type="button">Deploy approved patches</button></div>
+        <div class="settings-actions"><button id="approveAllPatches" type="button" class="secondary">Approve all</button><button id="deployApprovedPatches" type="button">Deploy approved patches</button></div>
         <form id="patchScheduleForm" class="settings-grid">
           <label>Automatic deployment interval (hours; 0 disables)
             <input id="patchInterval" type="number" min="0" max="8760" value="0" required>
@@ -451,6 +451,6 @@ FLEETVIEW_PORT=8080</code></pre>
       <p id="detailFootnote" class="detail-footnote"></p>
     </dialog>
 
-    <script src="/static/app.js?v=0.15.0" defer></script>
+    <script src="/static/app.js?v=0.15.1" defer></script>
   </body>
 </html>
