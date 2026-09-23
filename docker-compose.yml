@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - fleetview-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  server:
+    image: ghcr.io/mothertruck/fleetview-server:${FLEETVIEW_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+      # Optional legacy shared token. Leave unset to accept only one-time per-device tokens.
+      ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
+      TRUSTED_PROXY_COUNT: "0"
+      METRICS_RETENTION_DAYS: "7"
+      FLEETVIEW_COOKIE_SECURE: ${FLEETVIEW_COOKIE_SECURE:-false}
+    ports:
+      - "${FLEETVIEW_BIND_ADDRESS:-${EPC_BIND_ADDRESS:-127.0.0.1}}:${FLEETVIEW_PORT:-${EPC_PORT:-8080}}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - frontend
+      - backend
+
+volumes:
+  fleetview-postgres:
+
+networks:
+  frontend:
+  backend:
+    internal: true

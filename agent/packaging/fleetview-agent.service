@@ -1,0 +1,25 @@
+[Unit]
+Description=FleetView Linux Management Agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/fleetview-agent/agent.env
+ExecStart=/usr/local/bin/fleetview-agent --config /etc/fleetview-agent/agent.env
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=30s
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

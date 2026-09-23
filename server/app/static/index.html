@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>FleetView</title>
+    <link rel="stylesheet" href="/static/styles.css?v=0.15.0">
+  </head>
+  <body class="signed-out">
+    <header>
+      <div>
+        <p class="eyebrow">ENDPOINT MANAGEMENT</p>
+        <h1>FleetView</h1>
+      </div>
+      <div class="header-actions">
+        <span id="refreshState">Not connected</span>
+        <span id="accountBadge" class="account-badge"></span>
+        <button id="passwordButton" class="secondary" hidden>Change password</button>
+        <button id="authButton" class="secondary">Sign in</button>
+        <button id="refreshButton">Refresh</button>
+      </div>
+    </header>
+
+    <nav id="appTabs" class="app-tabs" aria-label="Primary navigation">
+      <button class="app-tab active" data-page="dashboard">Dashboard</button>
+      <button class="app-tab" data-page="patching">Patching</button>
+      <button class="app-tab" data-page="inventory">Inventory</button>
+      <button class="app-tab" data-page="deploy">Deploy</button>
+      <button class="app-tab" data-page="reports">Reports</button>
+      <button class="app-tab" data-page="agent">Agent</button>
+      <button class="app-tab" data-page="admin">Admin</button>
+    </nav>
+
+    <main>
+      <div id="notice" class="notice">Enter the admin token from your <code>.env</code> file to connect.</div>
+
+      <section class="page active" data-page-panel="dashboard">
+        <section class="metrics five" aria-label="Fleet health totals">
+          <article><span>Online devices</span><strong id="onlineDeviceCount">—</strong></article>
+          <article><span>Average CPU</span><strong id="averageCPU">—</strong></article>
+          <article><span>Average memory</span><strong id="averageMemory">—</strong></article>
+          <article><span>Average disk</span><strong id="averageDisk">—</strong></article>
+          <article><span>Health warnings</span><strong id="healthWarningCount">—</strong></article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">LIVE MONITORING</p><h2>Fleet health</h2></div>
+            <span class="panel-note">One lightweight sample per minute</span>
+          </div>
+          <div id="monitorDevices" class="monitor-devices"></div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="patching">
+        <section class="metrics five" aria-label="Patch and vulnerability totals">
+          <article><span>Devices</span><strong id="patchDeviceCount">—</strong></article>
+          <article><span>Needed patches</span><strong id="updateCount">—</strong></article>
+          <article><span>Vulnerabilities</span><strong id="vulnerabilityCount">—</strong></article>
+          <article><span>Critical</span><strong id="criticalCount">—</strong></article>
+          <article><span>High</span><strong id="highCount">—</strong></article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">PATCHING &amp; VULNERABILITIES</p><h2>Device posture</h2></div>
+          </div>
+          <div id="patchDevices" class="devices"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Recent jobs</h2></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Type</th><th>Device</th><th>Status</th><th>Created</th><th>Result</th></tr></thead>
+              <tbody id="jobs"><tr><td colspan="5" class="empty">No job data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="inventory">
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">INVENTORY</p><h2>Managed devices</h2></div>
+            <input id="inventorySearch" type="search" placeholder="Filter devices" aria-label="Filter devices">
+          </div>
+          <div id="inventoryDevices" class="inventory-devices"></div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="deploy">
+        <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">CUSTOM SOFTWARE</p><h2>Upload an installer</h2></div></div>
+          <div class="add-device-layout">
+            <form id="customPackageForm" class="add-device-form">
+              <label>Package name<input name="name" required maxlength="255" placeholder="e.g. Internal tool"></label>
+              <label>Target platform<select name="platform"><option value="linux">Linux</option><option value="windows">Windows</option></select></label>
+              <label>Installer files (up to 5; 8 MiB each, 16 MiB total)<input name="files" type="file" multiple required></label>
+              <label>Install command (runs in the uploaded files' directory)
+                <textarea name="command" required maxlength="4096" rows="3" placeholder="e.g. dpkg -i ./tool.deb"></textarea>
+              </label>
+              <p class="form-note">Commands run with the agent service's privileges. Only admins can upload or deploy these packages. For Linux scripts, use bash ./install.sh; Windows commands use PowerShell.</p>
+              <div class="settings-actions"><button type="submit">Save custom package</button></div>
+            </form>
+            <div class="table-wrap"><table><thead><tr><th>Package</th><th>Platform</th><th>Files and command</th><th></th></tr></thead><tbody id="customPackageRows"></tbody></table></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">SOFTWARE DEPLOYMENT</p><h2>Package catalog</h2></div></div>
+          <div class="add-device-layout">
+            <form id="packageForm" class="add-device-form">
+              <input type="hidden" id="packageId">
+              <label>Name<input id="packageName" type="text" required maxlength="255" autocomplete="off" placeholder="e.g. Firefox"></label>
+              <label>Description<input id="packageDescription" type="text" maxlength="2000" autocomplete="off" placeholder="Optional"></label>
+              <label>Version<input id="packageVersion" type="text" maxlength="100" autocomplete="off" placeholder="Optional"></label>
+              <label>Category<input id="packageCategory" type="text" maxlength="100" autocomplete="off" placeholder="e.g. Browsers"></label>
+              <label>pacman name (Arch/CachyOS)<input id="packagePacman" type="text" maxlength="255" autocomplete="off" placeholder="e.g. firefox"></label>
+              <label>apt name (Debian/Ubuntu)<input id="packageApt" type="text" maxlength="255" autocomplete="off" placeholder="e.g. firefox-esr"></label>
+              <label>winget ID (Windows)<input id="packageWinget" type="text" maxlength="255" autocomplete="off" placeholder="e.g. Mozilla.Firefox"></label>
+              <div class="settings-actions">
+                <button type="submit" id="packageSubmit">Save package</button>
+                <button type="button" id="packageCancelEdit" class="secondary" hidden>Cancel edit</button>
+              </div>
+              <p class="form-note">Set at least one platform's identifier — a package only needs the ones relevant to your fleet. Deploying to a device whose platform has none configured just skips that device with a clear reason, rather than failing its job.</p>
+            </form>
+            <div class="install-output">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Name</th><th>Version</th><th>Platforms</th><th></th></tr></thead>
+                  <tbody id="packageCatalog"><tr><td colspan="4" class="empty">No saved packages yet.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">TARGET DEVICES</p><h2>Select devices to deploy to</h2></div>
+            <input id="deployDeviceSearch" type="search" placeholder="Filter devices" aria-label="Filter devices">
+          </div>
+          <div class="panel-body">
+            <div id="deployDeviceList" class="deploy-device-list"></div>
+            <p id="deploySelectionCount" class="form-note">No devices selected.</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">SOFTWARE DEPLOYMENT</p><h2>Deploy by name</h2></div></div>
+          <form id="deployForm" class="agent-settings-form">
+            <label>Package name or ID<input id="deployPackageName" type="text" required placeholder="e.g. firefox, firefox-esr, or Mozilla.Firefox" autocomplete="off"></label>
+            <p class="form-note">For a one-off install that doesn't need saving to the catalog. The exact name depends on each device's platform: a pacman package name for Arch/CachyOS, an apt package name for Debian/Ubuntu, or a winget package ID for Windows. Only select devices that share the platform this name is valid for — a job queued with the wrong platform's name will just fail with a clear error, not install the wrong thing.</p>
+            <div class="settings-actions"><button type="submit" id="deploySubmit" disabled>Deploy to selected devices</button></div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Recent deployments</h2></div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Package</th><th>Device</th><th>Status</th><th>Created</th><th>Result</th></tr></thead>
+              <tbody id="deployJobs"><tr><td colspan="5" class="empty">No deployments yet.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="reports">
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">COMPLIANCE</p><h2>Fleet summary</h2></div></div>
+          <div id="reportsSummary" class="metrics" aria-label="Fleet compliance summary"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">COMPLIANCE</p><h2>By platform</h2></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Platform</th><th>Devices</th><th>Fully patched</th><th>No critical/high vulns</th><th>Online now</th></tr></thead>
+              <tbody id="reportsByPlatform"><tr><td colspan="5" class="empty">No devices have enrolled.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">COMPLIANCE</p><h2>Trends</h2></div></div>
+          <div id="reportsTrends"><div class="empty">Not enough history yet. Trends appear once the fleet has reported on more than one day.</div></div>
+          <form id="trendFilters" class="settings-grid">
+            <label>Trend scope<select id="trendDevice"><option value="">Entire fleet</option></select></label>
+            <label>Start (UTC)<input id="trendStart" type="date" required></label>
+            <label>End (UTC)<input id="trendEnd" type="date" required></label>
+            <button type="submit">Apply date range</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">CUSTOM REPORT</p><h2>Build a report on demand</h2></div></div>
+          <div class="add-device-layout">
+            <div class="add-device-form">
+              <label>Platform
+                <select id="reportFilterPlatform">
+                  <option value="all">All platforms</option>
+                </select>
+              </label>
+              <label>Status
+                <select id="reportFilterStatus">
+                  <option value="all">All devices</option>
+                  <option value="online">Online only</option>
+                  <option value="offline">Offline only</option>
+                </select>
+              </label>
+              <label>Search<input id="reportFilterSearch" type="search" placeholder="Filter by hostname or OS" autocomplete="off"></label>
+              <div>
+                <p class="eyebrow">COLUMNS</p>
+                <div id="reportFieldOptions" class="settings-grid"></div>
+              </div>
+              <button type="button" id="reportGenerate">Generate report</button>
+            </div>
+            <div class="install-output">
+              <p id="reportSummaryText" class="form-note">Choose filters and columns, then generate a report.</p>
+              <div class="device-actions">
+                <button type="button" id="reportDownloadCsv" disabled>Download CSV</button>
+                <button type="button" id="reportPrint" disabled>Print / Save as PDF</button>
+              </div>
+            </div>
+          </div>
+          <div id="reportPreviewWrap" class="table-wrap" hidden>
+            <p id="reportPrintHeader" class="print-only"></p>
+            <table>
+              <thead id="reportPreviewHead"></thead>
+              <tbody id="reportPreviewBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="agent">
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">AGENT SETTINGS</p><h2>Endpoint configuration</h2></div></div>
+          <form id="agentSettingsForm" class="agent-settings-form">
+            <label>Device<select id="agentSettingsDevice" required></select></label>
+            <div class="settings-grid">
+              <label>Monitoring interval (seconds)<input id="metricsInterval" type="number" min="15" max="3600" required></label>
+              <label>Inventory interval (seconds)<input id="inventoryInterval" type="number" min="300" max="86400" required></label>
+              <label class="toggle-setting"><input id="gpuMonitoringEnabled" type="checkbox"><span>Enable GPU monitoring</span></label>
+              <label class="toggle-setting"><input id="dockerInventoryEnabled" type="checkbox"><span>Enable Docker inventory</span></label>
+              <label class="toggle-setting"><input id="uninstallCodeRequired" type="checkbox"><span>Require code in the managed uninstall workflow</span></label>
+              <label>New uninstall code<input id="uninstallCode" type="password" minlength="4" maxlength="128" placeholder="Leave blank to keep current code"></label>
+            </div>
+            <div class="settings-actions"><button type="submit">Save agent settings</button><code>sudo fleetview-agent-uninstall</code></div>
+            <p class="form-note">Settings are picked up within about one minute. A local root user can still remove the service manually.</p>
+          </form>
+          <form id="scanScheduleForm" class="settings-grid">
+            <label>Automatic vulnerability scan interval (hours; 0 disables)
+              <input id="scanInterval" type="number" min="0" max="8760" value="0" required>
+            </label>
+            <button id="saveScanSchedule" type="submit">Save scan schedule</button>
+            <p id="scanScheduleStatus" class="form-note"></p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">ENROLLMENT</p><h2>Add a new device</h2></div></div>
+          <div class="add-device-layout">
+            <div class="add-device-form">
+              <label>Operating system
+                <select id="installPlatform">
+                  <option value="arch">Arch Linux / CachyOS</option>
+                  <option value="debian">Debian</option>
+                  <option value="ubuntu">Ubuntu</option>
+                  <option value="windows">Windows</option>
+                </select>
+              </label>
+              <label>Management server URL<input id="installServerURL" type="url" required></label>
+              <label>Device name (optional)<input id="installTokenLabel" type="text" maxlength="255" placeholder="e.g. media-server" autocomplete="off"></label>
+              <label>Token expires after
+                <select id="installTokenTTL">
+                  <option value="15">15 minutes</option>
+                  <option value="60" selected>1 hour</option>
+                  <option value="1440">24 hours</option>
+                </select>
+              </label>
+              <button id="generateEnrollmentToken" type="button">Generate enrollment command</button>
+            </div>
+            <div class="install-output">
+              <div id="linuxInstallOutput">
+                <p id="installCommandIntro">Generate a one-time token to get the install command for a new Linux device.</p>
+                <pre id="installCommandBlock" hidden><code id="installCommand"></code></pre>
+                <p id="installTokenMeta" class="form-note" hidden></p>
+                <div class="device-actions"><button id="copyInstallCommand" type="button" disabled>Copy command</button><a class="button-link secondary" href="/install/agent-source.tar.gz">Download Linux source bundle</a></div>
+                <p class="form-note">The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
+              </div>
+              <div id="windowsInstallOutput" hidden>
+                <p class="unsupported-note">Windows support is new and hasn't been verified on real Windows hardware yet. Expect rough edges.</p>
+                <p id="windowsInstallCommandIntro">Generate a one-time token to get the install command for a new Windows device.</p>
+                <pre id="windowsInstallCommandBlock" hidden><code id="windowsInstallCommand"></code></pre>
+                <p id="windowsInstallTokenMeta" class="form-note" hidden></p>
+                <div class="device-actions"><button id="copyWindowsInstallCommand" type="button" disabled>Copy command</button><a class="button-link secondary" href="/install/agent-source.tar.gz">Download agent source bundle</a></div>
+                <p class="form-note">Run this from an elevated PowerShell prompt in a checkout of this project on the Windows device (the source bundle above contains just the <code>agent/</code> and <code>scripts/</code> folders you need). It builds the agent with Go, writes its configuration, and registers it as a Windows service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">ENROLLMENT</p><h2>Enrollment tokens</h2></div><span class="panel-note">Most recent 50. Unused tokens can be revoked.</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Status</th><th>Created</th><th>Expires</th><th>Enrolled device</th><th></th></tr></thead>
+              <tbody id="enrollmentTokens"><tr><td colspan="6" class="empty">No token data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="admin">
+        <section class="panel" id="userManagement" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">ACCESS</p><h2>User management</h2></div><button id="reloadUsers" type="button" class="secondary">Refresh users</button></div>
+          <div class="panel-body">
+            <p>Admin: users and all settings. Operator: scans, patching and packages. Viewer: read-only fleet access.</p>
+            <p class="form-note">Roles apply to the entire fleet. New and reset accounts must change their temporary password at first sign-in. Disabling an account or changing its role signs out its sessions.</p>
+            <form id="createUserForm" class="settings-grid">
+              <label>Username<input id="newUsername" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required></label>
+              <label>Temporary password<input id="userPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+              <label>Role<select id="userRole"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option></select></label>
+              <button type="submit">Create user</button>
+            </form>
+            <p id="userNotice" class="form-note" role="status"></p>
+          </div>
+          <div class="table-wrap"><table class="user-list"><thead><tr><th>User</th><th>Role</th><th>Enabled</th><th>Temporary password reset</th><th>Action</th></tr></thead><tbody id="userRows"></tbody></table></div>
+          <details class="panel-body"><summary>Recent account changes</summary><div id="accountAudit"></div></details>
+        </section>
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">APPEARANCE</p><h2>Dashboard theme</h2></div></div>
+          <div class="panel-body">
+            <div id="themeSwatches" class="theme-swatches" role="group" aria-label="Accent color"></div>
+            <p class="form-note">A matching dark background and light accent for every color, including the original green. Saved in this browser.</p>
+          </div>
+        </section>
+
+        <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">FLEET DEFAULTS</p><h2>Default collection intervals</h2></div></div>
+          <form id="fleetSettingsForm" class="agent-settings-form">
+            <div class="settings-grid">
+              <label>Default monitoring interval (seconds)<input id="defaultMetricsInterval" type="number" min="15" max="3600" required></label>
+              <label>Default inventory interval (seconds)<input id="defaultInventoryInterval" type="number" min="300" max="86400" required></label>
+            </div>
+            <div class="settings-actions"><button type="submit">Save fleet defaults</button></div>
+            <p class="form-note">Applies to every device that hasn't had its own interval set from the Agent page. Existing per-device overrides are untouched.</p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">NETWORK</p><h2>Server port &amp; access</h2></div></div>
+          <div class="panel-body">
+            <p class="form-note">The dashboard/API port and bind address are Docker Compose settings, applied before the server process starts — the running server has no way to read or change them itself, so there's no live control for them here. They're set in this host's <code>.env</code> file instead:</p>
+            <pre><code>FLEETVIEW_BIND_ADDRESS=127.0.0.1   # or a LAN/VM IP, or 0.0.0.0
+FLEETVIEW_PORT=8080</code></pre>
+            <p class="form-note">After changing either value, run <code>docker compose up -d</code> on the Docker host to apply it. To check what's actually published right now (and diagnose access problems from another machine), run <code>./scripts/check-access.sh</code> there.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="tokenDialog">
+      <form id="loginForm" class="auth-form">
+        <h2 id="loginTitle">Sign in to FleetView</h2>
+        <p id="loginDescription">Use your FleetView account.</p>
+        <label id="setupTokenLabel" hidden>Existing admin token (one-time setup)<input id="setupToken" type="password" autocomplete="off"></label>
+        <label>Username<input id="loginUsername" autocomplete="username" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <p id="loginError" class="auth-error" role="alert"></p>
+        <button id="loginSubmit" type="submit">Sign in</button>
+      </form>
+    </dialog>
+
+    <dialog id="passwordDialog">
+      <form id="passwordForm" class="auth-form">
+        <h2>Change password</h2>
+        <p id="passwordDescription">Changing your password signs out all your sessions.</p>
+        <label>Current password<input id="currentPassword" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <label>New password (at least 12 characters)<input id="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <label>Confirm new password<input id="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+        <p id="passwordError" class="auth-error" role="alert"></p>
+        <div class="dialog-actions"><button id="cancelPassword" type="button" class="secondary">Cancel</button><button type="submit">Save password</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="deviceDialog" class="device-dialog">
+      <div class="detail-header">
+        <div>
+          <p class="eyebrow">DEVICE DETAILS</p>
+          <h2 id="detailTitle">Endpoint</h2>
+          <p id="detailSubtitle" class="detail-subtitle"></p>
+        </div>
+        <div class="detail-header-actions">
+          <button id="removeDeviceButton" class="danger">Remove device</button>
+          <button id="closeDeviceDialog" class="icon-button secondary" aria-label="Close device details">×</button>
+        </div>
+      </div>
+
+      <div id="detailMetrics" class="detail-metrics"></div>
+
+      <div class="detail-toolbar">
+        <div class="tabs" role="tablist" aria-label="Device data">
+          <button class="tab active" data-detail-tab="overview" role="tab">Overview</button>
+          <button class="tab" data-detail-tab="monitoring" role="tab">Monitoring</button>
+          <button class="tab" data-detail-tab="patches" role="tab">Needed patches</button>
+          <button class="tab" data-detail-tab="vulnerabilities" role="tab">Vulnerabilities</button>
+          <button class="tab" data-detail-tab="installed" role="tab">Installed software</button>
+          <button id="dockerContainersTab" class="tab" data-detail-tab="docker" role="tab" hidden>Docker Containers</button>
+        </div>
+        <input id="detailSearch" type="search" placeholder="Search results" aria-label="Search device data">
+      </div>
+
+      <div id="detailOverview" class="detail-overview"></div>
+      <div id="detailMonitoring" class="detail-monitoring" hidden>
+        <div class="monitoring-heading">
+          <div><p class="eyebrow">RESOURCE HISTORY</p><h3>System performance</h3></div>
+          <label>Range
+            <select id="metricRange">
+              <option value="1">Last hour</option>
+              <option value="6">Last 6 hours</option>
+              <option value="24" selected>Last 24 hours</option>
+              <option value="168">Last 7 days</option>
+            </select>
+          </label>
+        </div>
+        <div id="monitoringContent"></div>
+      </div>
+      <p id="detailTableSummary" class="table-summary"></p>
+      <div id="detailTableWrap" class="table-wrap detail-table-wrap">
+        <table>
+          <thead id="detailTableHead"></thead>
+          <tbody id="detailTableBody"></tbody>
+        </table>
+      </div>
+      <div id="patchControls" class="panel-body" hidden>
+        <div class="settings-actions"><button id="deployApprovedPatches" type="button">Deploy approved patches</button></div>
+        <form id="patchScheduleForm" class="settings-grid">
+          <label>Automatic deployment interval (hours; 0 disables)
+            <input id="patchInterval" type="number" min="0" max="8760" value="0" required>
+          </label>
+          <button type="submit">Save patch schedule</button>
+        </form>
+        <p id="patchScheduleInfo" class="form-note">Approved patches are queued at the next agent check-in after the interval.</p>
+      </div>
+      <p id="detailFootnote" class="detail-footnote"></p>
+    </dialog>
+
+    <script src="/static/app.js?v=0.15.0" defer></script>
+  </body>
+</html>

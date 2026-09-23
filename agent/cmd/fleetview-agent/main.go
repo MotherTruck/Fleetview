@@ -1,0 +1,329 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
+	"fleetview-agent/internal/client"
+	"fleetview-agent/internal/config"
+	"fleetview-agent/internal/containers"
+	"fleetview-agent/internal/inventory"
+	"fleetview-agent/internal/model"
+	"fleetview-agent/internal/packages"
+	"fleetview-agent/internal/telemetry"
+	"fleetview-agent/internal/vulnerability"
+)
+
+const version = "0.15.0"
+const serviceName = "fleetview-agent"
+
+func main() {
+	configPath := flag.String("config", defaultConfigPath(), "path to agent configuration")
+	serviceAction := flag.String("service", "", "service control action: install, uninstall, start, stop (Windows only)")
+	uninstallCode := flag.String("uninstall-code", "", "managed-uninstall code for -service uninstall; prompted for if omitted and one is configured")
+	flag.Parse()
+	logger := log.New(os.Stdout, "fleetview-agent: ", log.LstdFlags|log.LUTC)
+
+	if *serviceAction != "" {
+		if err := controlService(*serviceAction, *configPath, *uninstallCode); err != nil {
+			logger.Fatal(err)
+		}
+		return
+	}
+
+	if handled, err := runAsServiceIfHosted(logger, *configPath); handled {
+		if err != nil {
+			logger.Fatal(err)
+		}
+		return
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runAgent(ctx, *configPath, logger); err != nil {
+		logger.Fatal(err)
+	}
+}
+
+// runAgent loads configuration, enrolls if needed, and runs the scan/metrics/
+// job loop until ctx is cancelled. It's shared by the plain console entry
+// point above and the Windows service Handler (service_windows.go), which
+// supplies a ctx that's cancelled when the service control manager asks the
+// service to stop.
+func runAgent(ctx context.Context, configPath string, logger *log.Logger) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	state, err := client.LoadState(cfg.StatePath)
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+	api := client.New(cfg, state)
+
+	if state.DeviceID == "" || state.AgentToken == "" {
+		if cfg.EnrollmentToken == "" {
+			return fmt.Errorf("agent is not enrolled and FLEETVIEW_ENROLLMENT_TOKEN is empty")
+		}
+		hostname, err := os.Hostname()
+		if err != nil {
+			return err
+		}
+		enrollCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+		state, err = api.Enroll(enrollCtx, cfg.EnrollmentToken, hostname, version)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("enroll: %w", err)
+		}
+		if err := client.SaveState(cfg.StatePath, state); err != nil {
+			return fmt.Errorf("save enrollment: %w", err)
+		}
+		logger.Printf("enrolled device %s", state.DeviceID)
+	}
+
+	manager, err := packages.Detect()
+	if err != nil {
+		return err
+	}
+	settings := model.AgentSettings{
+		MetricsIntervalSeconds:   int(cfg.MetricsInterval.Seconds()),
+		InventoryIntervalSeconds: int(cfg.ScanInterval.Seconds()),
+		GPUMonitoringEnabled:     true,
+		DockerInventoryEnabled:   true,
+	}
+	settingsContext, settingsCancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	if remoteSettings, settingsErr := api.AgentSettings(settingsContext); settingsErr != nil {
+		logger.Printf("initial agent settings fetch failed; using local defaults: %v", settingsErr)
+	} else {
+		settings = remoteSettings
+	}
+	settingsCancel()
+	metricsCollector := telemetry.NewCollector()
+	if err := metricsCollector.Prime(); err != nil {
+		logger.Printf("metrics initialization failed: %v", err)
+	}
+	if err := scanAndReport(ctx, api, manager, settings.DockerInventoryEnabled); err != nil {
+		logger.Printf("initial scan failed: %v", err)
+	}
+
+	scanTicker := time.NewTicker(time.Duration(settings.InventoryIntervalSeconds) * time.Second)
+	jobTicker := time.NewTicker(cfg.JobPollInterval)
+	metricsTicker := time.NewTicker(time.Duration(settings.MetricsIntervalSeconds) * time.Second)
+	settingsTicker := time.NewTicker(60 * time.Second)
+	defer scanTicker.Stop()
+	defer jobTicker.Stop()
+	defer metricsTicker.Stop()
+	defer settingsTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Print("stopping")
+			return nil
+		case <-scanTicker.C:
+			if err := scanAndReport(ctx, api, manager, settings.DockerInventoryEnabled); err != nil {
+				logger.Printf("scheduled scan failed: %v", err)
+			}
+		case <-metricsTicker.C:
+			report, metricsErr := metricsCollector.Collect(settings.GPUMonitoringEnabled)
+			if metricsErr != nil {
+				logger.Printf("metrics collection failed: %v", metricsErr)
+			} else if metricsErr = api.ReportMetrics(ctx, report); metricsErr != nil {
+				logger.Printf("metrics report failed: %v", metricsErr)
+			}
+		case <-jobTicker.C:
+			if err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled); err != nil {
+				logger.Printf("job poll failed: %v", err)
+			}
+		case <-settingsTicker.C:
+			remoteSettings, settingsErr := api.AgentSettings(ctx)
+			if settingsErr != nil {
+				logger.Printf("agent settings refresh failed: %v", settingsErr)
+				continue
+			}
+			if remoteSettings.MetricsIntervalSeconds != settings.MetricsIntervalSeconds {
+				metricsTicker.Reset(time.Duration(remoteSettings.MetricsIntervalSeconds) * time.Second)
+			}
+			if remoteSettings.InventoryIntervalSeconds != settings.InventoryIntervalSeconds {
+				scanTicker.Reset(time.Duration(remoteSettings.InventoryIntervalSeconds) * time.Second)
+			}
+			settings = remoteSettings
+		}
+	}
+}
+
+func buildReport(ctx context.Context, manager packages.Manager, dockerInventoryEnabled bool) (model.Report, error) {
+	system, err := inventory.Collect(dockerInventoryEnabled)
+	if err != nil {
+		return model.Report{}, err
+	}
+	installed, err := manager.Installed(ctx)
+	if err != nil {
+		return model.Report{}, err
+	}
+	updates, err := manager.Updates(ctx)
+	if err != nil {
+		return model.Report{}, err
+	}
+	return model.Report{Hostname: system.Hostname, Platform: runtime.GOOS, OSName: system.OSName, OSVersion: system.OSVersion, Architecture: system.Architecture, PackageManager: manager.Name(), AgentVersion: version, Inventory: system.Details, InstalledPackages: installed, AvailableUpdates: updates, ScannedAt: time.Now().UTC()}, nil
+}
+
+func scanAndReport(ctx context.Context, api *client.Client, manager packages.Manager, dockerInventoryEnabled bool) error {
+	report, err := buildReport(ctx, manager, dockerInventoryEnabled)
+	if err != nil {
+		return err
+	}
+	return api.Report(ctx, report)
+}
+
+func handleNextJob(ctx context.Context, api *client.Client, manager packages.Manager, logger *log.Logger, dockerInventoryEnabled bool) error {
+	job, err := api.NextJob(ctx)
+	if err != nil || job == nil {
+		return err
+	}
+	logger.Printf("running job %s (%s)", job.ID, job.Type)
+	result := model.JobResult{Status: "succeeded", Output: "Job completed"}
+	switch job.Type {
+	case "SCAN_DEVICE":
+		err = scanAndReport(ctx, api, manager, dockerInventoryEnabled)
+		result.Output = "Inventory and update scan completed"
+	case "DOCKER_CONTAINER_ACTION":
+		if !dockerInventoryEnabled {
+			err = fmt.Errorf("Docker inventory and management are disabled for this device")
+			break
+		}
+		confirmed, _ := job.Options["confirmed"].(bool)
+		action, _ := job.Options["action"].(string)
+		id, _ := job.Options["container_id"].(string)
+		if !confirmed {
+			err = fmt.Errorf("Docker action requires confirmation")
+			break
+		}
+		err = containers.Action(ctx, action, id)
+		if err == nil {
+			result.Output = fmt.Sprintf("Docker container %s: %s", id, action)
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-Docker-action scan failed: %v", scanErr)
+			}
+		}
+	case "SCAN_VULNERABILITIES":
+		var report model.VulnerabilityReport
+		var scanner vulnerability.Scanner
+		scanner, err = vulnerability.Detect(manager.Name())
+		if err == nil {
+			var installed []model.Package
+			installed, err = manager.Installed(ctx)
+			if err == nil {
+				report, err = scanner.Scan(ctx, installed)
+			}
+		}
+		if err == nil {
+			err = api.ReportVulnerabilities(ctx, report)
+		}
+		if err == nil {
+			result.Output = fmt.Sprintf("Vulnerability scan completed: %d findings", len(report.Vulnerabilities))
+		}
+	case "INSTALL_UPDATES":
+		confirmed, _ := job.Options["confirmed"].(bool)
+		if !confirmed {
+			err = fmt.Errorf("server job did not include confirmed=true")
+			break
+		}
+		var output string
+		var exitCode int
+		output, exitCode, err = manager.InstallUpdates()
+		result.Output = output
+		result.ExitCode = &exitCode
+		if err == nil {
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-update scan failed: %v", scanErr)
+			}
+		}
+	case "INSTALL_APPROVED_UPDATES":
+		items, ok := job.Options["updates"].([]interface{})
+		if !ok || len(items) == 0 {
+			err = fmt.Errorf("approved update list missing")
+			break
+		}
+		approved := make([]model.ApprovedUpdate, 0, len(items))
+		for _, raw := range items {
+			entry, valid := raw.(map[string]interface{})
+			if !valid {
+				err = fmt.Errorf("invalid approved update")
+				break
+			}
+			name, nameOK := entry["package"].(string)
+			version, versionOK := entry["version"].(string)
+			if !nameOK || !versionOK {
+				err = fmt.Errorf("invalid approved update")
+				break
+			}
+			approved = append(approved, model.ApprovedUpdate{Package: name, Version: version})
+		}
+		if err != nil {
+			break
+		}
+		output, code, installErr := packages.InstallApproved(ctx, manager, approved)
+		err = installErr
+		result.Output, result.ExitCode = output, &code
+		if err == nil {
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-update scan failed: %v", scanErr)
+			}
+		}
+	case "INSTALL_CUSTOM_PACKAGE":
+		output, code, installErr := runCustomInstall(ctx, api, job.ID)
+		err = installErr
+		result.Output, result.ExitCode = output, &code
+		if err == nil {
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-install scan failed: %v", scanErr)
+			}
+		}
+	case "UNINSTALL_PACKAGE":
+		if confirmed, _ := job.Options["confirmed"].(bool); !confirmed {
+			err = fmt.Errorf("uninstall requires explicit confirmation")
+			break
+		}
+		name, _ := job.Options["package"].(string)
+		output, code, removeErr := packages.Uninstall(ctx, manager.Name(), name)
+		err = removeErr
+		result.Output, result.ExitCode = output, &code
+		if err == nil {
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-uninstall scan failed: %v", scanErr)
+			}
+		}
+	case "INSTALL_PACKAGE":
+		packageName, _ := job.Options["package"].(string)
+		if strings.TrimSpace(packageName) == "" {
+			err = fmt.Errorf("server job did not include a package name")
+			break
+		}
+		var output string
+		var exitCode int
+		output, exitCode, err = manager.Install(ctx, packageName)
+		result.Output = output
+		result.ExitCode = &exitCode
+		if err == nil {
+			result.Output = fmt.Sprintf("Installed %s\n\n%s", packageName, output)
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-install scan failed: %v", scanErr)
+			}
+		}
+	default:
+		err = fmt.Errorf("unsupported job type %q", job.Type)
+	}
+	if err != nil {
+		result.Status = "failed"
+		result.Error = err.Error()
+	}
+	return api.CompleteJob(ctx, job.ID, result)
+}
