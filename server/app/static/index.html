@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>FleetView</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.16.0">
+    <link rel="stylesheet" href="/static/styles.css?v=0.18.0">
+    <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
   </head>
   <body class="signed-out">
     <header>
@@ -250,6 +251,19 @@
 
       <section class="page" data-page-panel="agent">
         <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">FLEET</p><h2>Agent versions</h2></div>
+            <span class="panel-note" id="agentVersionsNote"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Device</th><th>Platform</th><th>Version</th><th>Status</th><th>Live</th><th></th></tr></thead>
+              <tbody id="agentVersionsTable"><tr><td colspan="6" class="empty">No device data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">AGENT SETTINGS</p><h2>Endpoint configuration</h2></div></div>
           <form id="agentSettingsForm" class="agent-settings-form">
             <label>Device<select id="agentSettingsDevice" required></select></label>
@@ -427,6 +441,7 @@ FLEETVIEW_PORT=8080</code></pre>
           <button class="tab" data-detail-tab="vulnerabilities" role="tab">Vulnerabilities</button>
           <button class="tab" data-detail-tab="installed" role="tab">Installed software</button>
           <button id="dockerContainersTab" class="tab" data-detail-tab="docker" role="tab" hidden>Docker Containers</button>
+          <button id="terminalTab" class="tab" data-detail-tab="terminal" role="tab" hidden>Terminal</button>
         </div>
         <input id="detailSearch" type="search" placeholder="Search results" aria-label="Search device data">
       </div>
@@ -445,6 +460,14 @@ FLEETVIEW_PORT=8080</code></pre>
           </label>
         </div>
         <div id="monitoringContent"></div>
+      </div>
+      <div id="detailTerminal" class="detail-terminal" hidden>
+        <div class="terminal-heading">
+          <div><p class="eyebrow">DIAGNOSTICS</p><h3>Live terminal</h3></div>
+          <span id="terminalStatus" class="panel-note">Not connected</span>
+        </div>
+        <p class="form-note">A real interactive shell on this device, streamed directly to your browser -- not a queued job. Only one terminal session can be open per device at a time, and it ends when this tab closes. Every session is recorded in the account audit log.</p>
+        <div id="terminalContainer" class="terminal-container"></div>
       </div>
       <p id="detailTableSummary" class="table-summary"></p>
       <div id="detailTableWrap" class="table-wrap detail-table-wrap">
@@ -466,6 +489,8 @@ FLEETVIEW_PORT=8080</code></pre>
       <p id="detailFootnote" class="detail-footnote"></p>
     </dialog>
 
-    <script src="/static/app.js?v=0.16.0" defer></script>
+    <script src="/static/vendor/xterm/xterm.js" defer></script>
+    <script src="/static/vendor/xterm/xterm-addon-fit.js" defer></script>
+    <script src="/static/app.js?v=0.18.0" defer></script>
   </body>
 </html>

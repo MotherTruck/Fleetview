@@ -24,6 +24,13 @@ const state = {
   patchSchedules: {},
   editingPackageId: null,
   publishedAgentVersion: null,
+  liveDeviceIds: new Set(),
+  statusSocket: null,
+  metricsSocket: null,
+  metricsSocketDeviceId: null,
+  liveMetricsByDevice: new Map(),
+  terminalSocket: null,
+  terminalDeviceId: null,
 };
 
 const ACCENT_PRESETS = [
@@ -69,6 +76,174 @@ async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+function wsBase() {
+  return (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+}
+
+// A small reconnecting-WebSocket helper shared by the fleet-wide live
+// status channel and the per-device metrics/terminal channels: on any
+// close (including the server's own accept-then-error-frame-then-close
+// rejection -- see server/app/live.py's _reject) it retries after a fixed
+// delay as long as `shouldReconnect()` still says yes, so a transient
+// server restart or network blip recovers on its own instead of leaving
+// the dashboard silently stale.
+function connectLiveSocket(path, { onMessage, onOpen, onClose, shouldReconnect, retryMs = 3000 }) {
+  const holder = { socket: null, stopped: false };
+  if (typeof WebSocket === "undefined") return { close: () => {}, send: () => {} };
+  const attempt = () => {
+    if (holder.stopped) return;
+    const socket = new WebSocket(wsBase() + path);
+    holder.socket = socket;
+    socket.addEventListener("open", () => onOpen && onOpen());
+    socket.addEventListener("message", (event) => {
+      try { onMessage(JSON.parse(event.data)); } catch { /* ignore malformed frames */ }
+    });
+    socket.addEventListener("close", () => {
+      if (holder.socket === socket) holder.socket = null;
+      onClose && onClose();
+      if (!holder.stopped && shouldReconnect()) setTimeout(attempt, retryMs);
+    });
+    socket.addEventListener("error", () => socket.close());
+  };
+  attempt();
+  return {
+    close: () => { holder.stopped = true; holder.socket?.close(); },
+    send: (payload) => { if (holder.socket?.readyState === WebSocket.OPEN) holder.socket.send(JSON.stringify(payload)); },
+  };
+}
+
+function connectLiveStatus() {
+  state.statusSocket?.close();
+  state.statusSocket = connectLiveSocket("/api/v1/admin/live-status", {
+    shouldReconnect: () => !!state.user,
+    onMessage: (message) => {
+      if (message.type === "snapshot") state.liveDeviceIds = new Set(message.live_device_ids || []);
+      else if (message.type === "status") {
+        if (message.live) state.liveDeviceIds.add(message.device_id);
+        else state.liveDeviceIds.delete(message.device_id);
+      } else return;
+      renderAgentVersionsTable();
+      renderDashboard();
+    },
+  });
+}
+
+function disconnectLiveStatus() {
+  state.statusSocket?.close();
+  state.statusSocket = null;
+  state.liveDeviceIds = new Set();
+}
+
+function connectDeviceMetrics(deviceId) {
+  if (state.metricsSocketDeviceId === deviceId && state.metricsSocket) return;
+  disconnectDeviceMetrics();
+  state.metricsSocketDeviceId = deviceId;
+  state.metricsSocket = connectLiveSocket(`/api/v1/admin/devices/${deviceId}/metrics-live`, {
+    shouldReconnect: () => state.metricsSocketDeviceId === deviceId,
+    onMessage: (message) => {
+      if (message.type === "metrics") {
+        state.liveMetricsByDevice.set(deviceId, message);
+        if (state.detailDevice?.id === deviceId && state.detailTab === "monitoring") renderMonitoring(state.detailDevice);
+      } else if (message.type === "status" && !message.live) {
+        state.liveMetricsByDevice.delete(deviceId);
+        if (state.detailDevice?.id === deviceId && state.detailTab === "monitoring") renderMonitoring(state.detailDevice);
+      }
+    },
+  });
+}
+
+function disconnectDeviceMetrics() {
+  state.metricsSocket?.close();
+  state.metricsSocket = null;
+  state.metricsSocketDeviceId = null;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// A real interactive shell on the device, streamed over WebSocket -- not a
+// queued job like everything else this dashboard does. Unlike the metrics
+// and status sockets, a dead terminal connection is never auto-reconnected:
+// re-opening a shell without the admin asking for it again would be
+// surprising, and the server only allows one session per device at a time
+// anyway (see server/app/live.py's claim_terminal), so a stale reconnect
+// attempt could just collide with a session opened from elsewhere.
+function connectTerminal(deviceId) {
+  if (state.terminalDeviceId === deviceId && state.terminalSocket) {
+    state.xtermFit?.fit();
+    return;
+  }
+  disconnectTerminal();
+  state.terminalDeviceId = deviceId;
+  const container = $("#terminalContainer");
+  container.replaceChildren();
+  const term = new Terminal({
+    convertEol: true, fontSize: 13, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    theme: { background: "#0b0f0d" }, scrollback: 5000,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(container);
+  fit.fit();
+  state.xterm = term;
+  state.xtermFit = fit;
+  $("#terminalStatus").textContent = "Connecting…";
+
+  const socket = connectLiveSocket(`/api/v1/admin/devices/${deviceId}/terminal-live`, {
+    shouldReconnect: () => false,
+    onOpen: () => {
+      $("#terminalStatus").textContent = "Connected · starting shell…";
+      sendTerminalResize();
+    },
+    onClose: () => { $("#terminalStatus").textContent = "Disconnected"; },
+    onMessage: (message) => {
+      if (message.type === "terminal_output") {
+        $("#terminalStatus").textContent = "Live";
+        term.write(base64ToBytes(message.data));
+      } else if (message.type === "terminal_closed") {
+        $("#terminalStatus").textContent = `Session ended: ${message.reason || "closed"}`;
+        term.write(`\r\n\x1b[90m[session ended: ${message.reason || "closed"}]\x1b[0m\r\n`);
+        state.terminalSocket?.close();
+      } else if (message.type === "error") {
+        $("#terminalStatus").textContent = `Error: ${message.reason || "rejected"}`;
+        term.write(`\r\n\x1b[91m[${message.reason || "connection rejected"}]\x1b[0m\r\n`);
+      }
+    },
+  });
+  state.terminalSocket = socket;
+  term.onData((data) => socket.send({ type: "input", data: bytesToBase64(new TextEncoder().encode(data)) }));
+
+  const handleResize = () => { fit.fit(); sendTerminalResize(); };
+  window.addEventListener("resize", handleResize);
+  state.terminalResizeHandler = handleResize;
+}
+
+function sendTerminalResize() {
+  if (!state.xterm || !state.terminalSocket) return;
+  state.terminalSocket.send({ type: "resize", cols: state.xterm.cols, rows: state.xterm.rows });
+}
+
+function disconnectTerminal() {
+  if (state.terminalResizeHandler) window.removeEventListener("resize", state.terminalResizeHandler);
+  state.terminalResizeHandler = null;
+  state.terminalSocket?.close();
+  state.terminalSocket = null;
+  state.terminalDeviceId = null;
+  state.xterm?.dispose();
+  state.xterm = null;
+  state.xtermFit = null;
+}
+
 function escapeHtml(value = "") {
   const node = document.createElement("div");
   node.textContent = String(value);
@@ -98,6 +273,9 @@ function endLocalSession() {
   state.agentOptionsSignature = ""; state.deploySelected.clear();
   $("#userRows").replaceChildren(); $("#accountAudit").replaceChildren();
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+  disconnectLiveStatus();
+  disconnectDeviceMetrics();
+  disconnectTerminal();
   applyPermissions();
 }
 
@@ -141,6 +319,7 @@ function acceptSession(session) {
     $("#passwordDescription").textContent = "Changing your password signs out all your sessions.";
     $("#cancelPassword").hidden = false;
     setPage("dashboard"); refresh();
+    connectLiveStatus();
   }
 }
 
@@ -364,6 +543,50 @@ function renderAgentUpgradeStatus(device) {
     : `Version ${manifest.version} is published; this device reports ${device.agent_version || "an unknown version"}.`;
 }
 
+function renderAgentVersionsTable() {
+  const table = $("#agentVersionsTable");
+  const note = $("#agentVersionsNote");
+  if (!table) return;
+  const manifest = state.publishedAgentVersion;
+  note.textContent = manifest ? `Server has agent ${manifest.version} published.` : "This server has no published agent binaries built in.";
+  const devices = [...state.devices].sort((a, b) => (a.display_name || a.hostname).localeCompare(b.display_name || b.hostname));
+  table.innerHTML = devices.length ? devices.map((device) => {
+    const supportedPlatform = device.platform === "linux" || device.platform === "windows";
+    const versionParts = String(device.agent_version || "").split(".").map(Number);
+    const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
+    const upToDate = manifest && device.agent_version === manifest.version;
+    const canUpgrade = manifest && supportedPlatform && bootstrapped && !upToDate;
+    const statusPill = !manifest ? '<span class="pill severity-unknown">Unknown</span>'
+      : upToDate ? '<span class="pill succeeded">Up to date</span>'
+      : !supportedPlatform ? '<span class="pill severity-unknown">Unsupported platform</span>'
+      : !bootstrapped ? '<span class="pill severity-medium">Needs manual bootstrap</span>'
+      : '<span class="pill severity-high">Outdated</span>';
+    return `<tr>
+      <td class="package-name">${escapeHtml(device.display_name || device.hostname)}</td>
+      <td>${escapeHtml(device.platform || "Unknown")}</td>
+      <td><code>${escapeHtml(device.agent_version || "Unknown")}</code></td>
+      <td>${statusPill}</td>
+      <td>${state.liveDeviceIds.has(device.id) ? '<span class="pill succeeded live-pulse">● Live</span>' : '<span class="pill severity-unknown">Offline</span>'}</td>
+      <td>${canUpgrade ? `<button type="button" class="secondary" data-upgrade-agent="${escapeHtml(device.id)}">Upgrade</button>` : "—"}</td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="6" class="empty">No enrolled devices.</td></tr>';
+}
+
+async function upgradeAgentDevice(id, button) {
+  const device = state.devices.find(item => item.id === id);
+  const manifest = state.publishedAgentVersion;
+  if (!id || !device || !manifest) return;
+  if (!confirm(`Upgrade the agent on ${device.display_name || device.hostname} from ${device.agent_version || "an unknown version"} to ${manifest.version}?\n\nThe agent downloads and verifies the new binary, then replaces itself. On Linux this happens in place with no restart; on Windows the service restarts briefly.`)) return;
+  if (button) button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${id}/upgrade-agent`, { method: "POST" });
+    showNotice(`Agent upgrade to ${manifest.version} queued for ${device.display_name || device.hostname}.`);
+    setPage("patching");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { if (button) button.disabled = false; }
+}
+
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
 }
@@ -495,7 +718,7 @@ function renderDashboard() {
     const gpus = Array.isArray(metrics.gpus) ? metrics.gpus : [];
     const gpuSummary = gpus.length ? `${gpus.length} GPU${gpus.length === 1 ? "" : "s"} · ${formatPercent(gpus[0].utilization_percent)}` : "No GPU data";
     return `<article class="monitor-card" data-action="details" data-tab="monitoring" data-device-id="${escapeHtml(device.id)}" tabindex="0">
-      <div class="device-top"><div><h3>${escapeHtml(device.display_name || device.hostname)}</h3><div class="device-subtitle">${escapeHtml([device.os_name, device.os_version].filter(Boolean).join(" · "))}</div></div><div class="status ${device.online ? "online" : ""}"><span class="dot"></span>${device.online ? "Online" : "Offline"}</div></div>
+      <div class="device-top"><div><h3>${escapeHtml(device.display_name || device.hostname)}</h3><div class="device-subtitle">${escapeHtml([device.os_name, device.os_version].filter(Boolean).join(" · "))}</div></div><div class="status ${device.online ? "online" : ""}"><span class="dot"></span>${device.online ? "Online" : "Offline"}${state.liveDeviceIds.has(device.id) ? ' <span class="live-pulse" title="Live connection open">●</span>' : ""}</div></div>
       <div class="live-resource-grid">
         <div><span><small>CPU</small><strong>${formatPercent(cpu)}</strong></span>${usageBar(cpu)}</div>
         <div><span><small>Memory</small><strong>${formatPercent(memory)}</strong></span>${usageBar(memory)}</div>
@@ -969,7 +1192,7 @@ function render() {
   renderJobs();
   renderEnrollmentTokens();
   renderInstallCommand();
-  if (state.user?.role === "admin") renderAgentSettingsOptions();
+  if (state.user?.role === "admin") { renderAgentSettingsOptions(); renderAgentVersionsTable(); }
   renderAdmin();
   applyPermissions();
 }
@@ -1004,11 +1227,17 @@ function renderMonitoring(device) {
     container.innerHTML = '<div class="empty">Loading monitoring history…</div>';
     return;
   }
-  const metrics = device.metrics;
+  const live = state.liveMetricsByDevice.get(device.id);
+  const metrics = live || device.metrics;
   if (!metrics) {
     container.innerHTML = '<div class="empty">No telemetry has arrived yet. The upgraded agent sends its first sample after one minute.</div>';
     return;
   }
+  const liveBadge = live
+    ? '<span class="pill succeeded live-pulse">● Live</span>'
+    : state.liveDeviceIds.has(device.id)
+      ? '<span class="pill pending">Connecting…</span>'
+      : '<span class="pill severity-unknown">Not live (showing last reported sample)</span>';
   const samples = state.detailHistory;
   const memory = usagePercent(metrics.memory_used_bytes, metrics.memory_total_bytes);
   const disk = usagePercent(metrics.disk_used_bytes, metrics.disk_total_bytes);
@@ -1030,6 +1259,7 @@ function renderMonitoring(device) {
   }).join("")}</div></section>` : '<section class="gpu-section empty-gpu"><p>No supported GPU telemetry was detected on this device.</p></section>';
 
   container.innerHTML = `
+    <p class="live-status-line">${liveBadge}</p>
     <div class="current-metrics">
       <div><small>CPU</small><strong>${formatPercent(metrics.cpu_percent)}</strong>${usageBar(metrics.cpu_percent)}</div>
       <div><small>Memory</small><strong>${formatPercent(memory)}</strong><span>${formatUsage(metrics.memory_used_bytes, metrics.memory_total_bytes)}</span>${usageBar(memory)}</div>
@@ -1092,6 +1322,10 @@ function renderDeviceDetails() {
   const dockerAvailable = inventory.docker_available === true;
   $("#dockerContainersTab").hidden = !dockerAvailable;
   if (!dockerAvailable && state.detailTab === "docker") state.detailTab = "overview";
+  const versionParts = String(device.agent_version || "").split(".").map(Number);
+  const terminalSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 18));
+  $("#terminalTab").hidden = !terminalSupported;
+  if (!terminalSupported && state.detailTab === "terminal") state.detailTab = "overview";
   const severities = device.vulnerability_severity_counts || {};
   $("#detailTitle").textContent = device.display_name || device.hostname;
   $("#detailSubtitle").textContent = [device.os_name, device.os_version, device.architecture].filter(Boolean).join(" · ");
@@ -1111,11 +1345,13 @@ function renderDeviceDetails() {
 
   const overview = state.detailTab === "overview";
   const monitoring = state.detailTab === "monitoring";
+  const terminal = state.detailTab === "terminal";
   $("#detailOverview").hidden = !overview;
   $("#detailMonitoring").hidden = !monitoring;
-  $("#detailSearch").hidden = overview || monitoring;
-  $("#detailTableSummary").hidden = overview || monitoring;
-  $("#detailTableWrap").hidden = overview || monitoring;
+  $("#detailTerminal").hidden = !terminal;
+  $("#detailSearch").hidden = overview || monitoring || terminal;
+  $("#detailTableSummary").hidden = overview || monitoring || terminal;
+  $("#detailTableWrap").hidden = overview || monitoring || terminal;
   $("#patchControls").hidden = state.detailTab !== "patches";
   $("#detailFootnote").textContent = "";
   if (overview) {
@@ -1124,6 +1360,10 @@ function renderDeviceDetails() {
   }
   if (monitoring) {
     renderMonitoring(device);
+    return;
+  }
+  if (terminal) {
+    connectTerminal(device.id);
     return;
   }
 
@@ -1225,7 +1465,7 @@ async function openDeviceDetails(deviceId, tab = "overview") {
     state.patchApprovals[deviceId] = approvals;
     state.patchSchedules[deviceId] = schedule;
     renderDeviceDetails();
-    if (tab === "monitoring") await loadMetricHistory();
+    if (tab === "monitoring") { await loadMetricHistory(); connectDeviceMetrics(deviceId); }
   } catch (error) {
     $("#detailTableSummary").textContent = error.message;
   }
@@ -1289,21 +1529,10 @@ $("#scanScheduleForm").addEventListener("submit", async event => {
     showNotice("Scan schedule saved. Disabling does not cancel jobs already queued.");
   } catch (error) { showNotice(error.message, true); }
 });
-$("#upgradeAgentButton").addEventListener("click", async () => {
-  const id = $("#agentSettingsDevice").value;
-  const device = state.devices.find(item => item.id === id);
-  const manifest = state.publishedAgentVersion;
-  if (!id || !device || !manifest) return;
-  if (!confirm(`Upgrade the agent on ${device.display_name || device.hostname} from ${device.agent_version || "an unknown version"} to ${manifest.version}?\n\nThe agent downloads and verifies the new binary, then replaces itself. On Linux this happens in place with no restart; on Windows the service restarts briefly.`)) return;
-  const button = $("#upgradeAgentButton");
-  button.disabled = true;
-  try {
-    await api(`/api/v1/admin/devices/${id}/upgrade-agent`, { method: "POST" });
-    showNotice(`Agent upgrade to ${manifest.version} queued for ${device.display_name || device.hostname}.`);
-    setPage("patching");
-    await refresh();
-  } catch (error) { showNotice(error.message, true); }
-  finally { button.disabled = false; }
+$("#upgradeAgentButton").addEventListener("click", () => upgradeAgentDevice($("#agentSettingsDevice").value, $("#upgradeAgentButton")));
+$("#agentVersionsTable").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-upgrade-agent]");
+  if (button) upgradeAgentDevice(button.dataset.upgradeAgent, button);
 });
 $("#trendFilters").addEventListener("submit", async event => {
   event.preventDefault();
@@ -1688,6 +1917,7 @@ $("#authButton").addEventListener("click", async () => {
   } catch (error) { showNotice(error.message, true); }
 });
 $("#closeDeviceDialog").addEventListener("click", () => $("#deviceDialog").close());
+$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); });
 $("#removeDeviceButton").addEventListener("click", async () => {
   const device = state.detailDevice;
   if (!device) return;
@@ -1718,7 +1948,13 @@ $("#deviceDialog").addEventListener("click", async (event) => {
   state.detailTab = tab.dataset.detailTab;
   $("#detailSearch").value = "";
   renderDeviceDetails();
-  if (state.detailTab === "monitoring" && !state.detailHistory.length) await loadMetricHistory();
+  if (state.detailTab === "monitoring") {
+    if (!state.detailHistory.length) await loadMetricHistory();
+    if (state.detailDevice) connectDeviceMetrics(state.detailDevice.id);
+  } else {
+    disconnectDeviceMetrics();
+  }
+  if (state.detailTab !== "terminal") disconnectTerminal();
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
 $("#themeSwatches").addEventListener("click", (event) => {

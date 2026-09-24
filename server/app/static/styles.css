@@ -78,6 +78,12 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--acce
 .status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .78rem; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #65756f; }
 .online .dot { background: #5ee6b1; box-shadow: 0 0 12px #5ee6b155; }
+.live-pulse { color: #5ee6b1; animation: live-pulse-fade 1.6s ease-in-out infinite; }
+.live-status-line { margin: 0 0 14px; }
+@keyframes live-pulse-fade { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.terminal-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.terminal-container { height: 480px; background: #0b0f0d; border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-top: 10px; }
+.terminal-container .xterm { height: 100%; }
 .device-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 18px 0; }
 .device-stats div { padding: 10px; background: var(--raised); border-radius: 8px; }
 .device-stats small { display: block; color: var(--muted); margin-bottom: 4px; }

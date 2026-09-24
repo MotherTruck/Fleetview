@@ -106,6 +106,11 @@ pinning happens automatically, but it remains available (e.g. if
 
 ## Notes
 
+- Live metrics and the interactive terminal (see [`docs/LIVE.md`](LIVE.md))
+  run over WebSocket, which Caddy's `reverse_proxy` handles transparently
+  alongside plain HTTP -- no separate configuration needed, and this
+  traffic is encrypted the same way as everything else once the profile
+  is enabled.
 - `FLEETVIEW_TRUSTED_PROXY_IPS` isn't something you need to touch: the
   `server` container is already configured to trust forwarded headers from
   Caddy's fixed internal address (`172.28.0.10` on the `frontend` network)

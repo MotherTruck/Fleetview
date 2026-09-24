@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .database import Base, engine, get_db
 from .enrollment import as_utc, token_status
+from .live import router as live_router, hub as live_hub
 from .models import ComplianceSnapshot, Device, EnrollmentToken, FleetSettings, Job, MetricSample, Package, utcnow
 from .schemas import AgentSettingsUpdate, DeviceReport, EnrollmentTokenCreate, EnrollRequest, EnrollResponse, FleetSettingsUpdate, JobCreate, JobResult, MetricsReport, PackageUpsert, UninstallVerifyRequest, VulnerabilityReport
 from .security import new_agent_token, new_enrollment_token, password_hash, secure_equal, token_hash, verify_password
@@ -25,9 +26,10 @@ from .schemas import VulnerabilityScheduleUpdate
 
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="FleetView", version="0.15.0", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="FleetView", version="0.18.0", docs_url="/api/docs", redoc_url=None)
 app.include_router(accounts_router)
 app.include_router(deployment_router)
+app.include_router(live_router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -83,6 +85,7 @@ def device_view(device: Device, fleet_settings: FleetSettings, include_packages:
         "last_seen": device.last_seen,
         "last_scan_at": device.last_scan_at,
         "online": online,
+        "live": live_hub.is_agent_live(device.id),
         "update_count": device.update_count,
         "security_update_count": device.security_update_count,
         "inventory": public_inventory,

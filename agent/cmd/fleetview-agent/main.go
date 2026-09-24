@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"fleetview-agent/internal/config"
 	"fleetview-agent/internal/containers"
 	"fleetview-agent/internal/inventory"
+	"fleetview-agent/internal/live"
 	"fleetview-agent/internal/model"
 	"fleetview-agent/internal/packages"
 	"fleetview-agent/internal/telemetry"
@@ -25,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.17.0"
+var version = "0.18.0"
 
 const serviceName = "fleetview-agent"
 
@@ -129,6 +131,14 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 		logger.Printf("initial scan failed: %v", err)
 	}
 
+	// The live WebSocket channel (fast metrics push + an admin-opened
+	// interactive terminal) runs alongside the poll loop below, not instead
+	// of it: a device with no live connection is still fully manageable
+	// through queued jobs exactly as before this existed.
+	var gpuLiveEnabled atomic.Bool
+	gpuLiveEnabled.Store(settings.GPUMonitoringEnabled)
+	go live.Run(ctx, api, metricsCollector, &gpuLiveEnabled, logger)
+
 	scanTicker := time.NewTicker(time.Duration(settings.InventoryIntervalSeconds) * time.Second)
 	jobTicker := time.NewTicker(cfg.JobPollInterval)
 	metricsTicker := time.NewTicker(time.Duration(settings.MetricsIntervalSeconds) * time.Second)
@@ -179,6 +189,7 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 			if remoteSettings.InventoryIntervalSeconds != settings.InventoryIntervalSeconds {
 				scanTicker.Reset(time.Duration(remoteSettings.InventoryIntervalSeconds) * time.Second)
 			}
+			gpuLiveEnabled.Store(remoteSettings.GPUMonitoringEnabled)
 			settings = remoteSettings
 		}
 	}

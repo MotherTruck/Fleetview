@@ -50,6 +50,23 @@ func New(cfg config.Config, state model.State) (*Client, error) {
 	return &Client{baseURL: cfg.ServerURL, http: &http.Client{Timeout: cfg.RequestTimeout, Transport: transport}, state: state}, nil
 }
 
+// HTTPClient returns the *http.Client configured by New (including its TLS
+// setup: FLEETVIEW_CA_FILE pinning or FLEETVIEW_ALLOW_INSECURE_TLS), so the
+// live WebSocket channel dials with the exact same trust configuration as
+// every other request this agent makes, rather than duplicating that logic.
+func (c *Client) HTTPClient() *http.Client { return c.http }
+
+// BaseURL returns the configured server URL (http:// or https://); the live
+// package derives its ws:// or wss:// URL from it.
+func (c *Client) BaseURL() string { return c.baseURL }
+
+// DeviceID and AgentToken expose the enrolled device's identity for the live
+// WebSocket handshake, which authenticates the same way as every other
+// agent request (Authorization: Bearer + X-Device-ID), just as WS headers
+// instead of HTTP headers.
+func (c *Client) DeviceID() string   { return c.state.DeviceID }
+func (c *Client) AgentToken() string { return c.state.AgentToken }
+
 func LoadState(path string) (model.State, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
