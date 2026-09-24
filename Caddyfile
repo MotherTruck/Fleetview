@@ -4,5 +4,20 @@
 
 {$FLEETVIEW_TLS_HOSTNAME}:8443 {
 	tls internal
-	reverse_proxy server:8080
+
+	# Lets the install scripts fetch this deployment's private CA over the
+	# same HTTPS endpoint (bootstrapped with one insecure fetch, same trust
+	# model as the rest of the unauthenticated enrollment flow — see
+	# docs/TLS.md) instead of requiring it to be copied out and distributed
+	# by hand. Public, like the other /install/ bootstrap files the backend
+	# server already serves unauthenticated.
+	handle /install/ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		file_server
+	}
+
+	handle {
+		reverse_proxy server:8080
+	}
 }

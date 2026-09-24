@@ -45,19 +45,34 @@ the warning once for a quick test).
 
 On **Agent → Add a new device**, set the management server URL to
 `https://<FLEETVIEW_TLS_HOSTNAME>:8443` instead of the plain-HTTP address,
-then generate the install command as usual. The agent side already
-supports HTTPS server URLs; you additionally need one of the two options
-in step 3 so it can validate Caddy's certificate.
+then generate the install command as usual — no other change needed.
 
-## 3. Trust the certificate
+Both `scripts/remote-install-linux.sh` and `scripts/install-agent.ps1`
+detect the `https://` URL automatically and fetch Caddy's private CA
+themselves (from `/install/ca.crt`, which Caddy serves publicly for
+exactly this purpose) before installing anything else, then pin it via
+`FLEETVIEW_CA_FILE` in the agent's config. There's no manual CA
+distribution step for a normal install: the certificate is trusted
+correctly from the very first run.
+
+That one CA fetch happens over an unverified connection — trust-on-first-
+use, the same exposure the rest of the unauthenticated install flow
+already has (the agent source tarball itself is fetched the same way).
+Everything the agent does afterward, every job poll and result upload,
+validates against the pinned CA for real. If you want a stronger guarantee
+than trust-on-first-use for that one bootstrap fetch, use Option A below
+to pre-stage the CA file instead of letting the installer fetch it.
+
+## 3. Trust the certificate (browser, or a stronger guarantee than TOFU)
 
 Caddy's certificate is signed by a private CA it generates on first start,
 stored in the `fleetview-caddy-data` volume — not a certificate your
-system's trust store already knows about. Agents (and your browser, for a
-clean padlock instead of a warning) need to be told to trust it, one of two
-ways:
+system's trust store or browser already knows about. The install scripts
+handle agents automatically (step 2); this section is for your browser, or
+for pre-staging the CA on an endpoint instead of trusting the installer's
+first-fetch.
 
-**Option A — pin the specific CA (recommended).** Extract it once:
+Extract the CA once:
 
 ```bash
 sudo docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./fleetview-ca.crt
@@ -69,28 +84,25 @@ If that path doesn't exist (Caddy's image has changed it), find the real one fir
 sudo docker compose exec caddy find /data -name root.crt
 ```
 
-Copy `fleetview-ca.crt` to each endpoint and add this line to its
+**For your browser**, import `fleetview-ca.crt` into your OS or browser's
+trust store as a trusted root — this removes the certificate warning and
+gives a clean padlock.
+
+**For an agent**, copy `fleetview-ca.crt` to the endpoint ahead of running
+the install command and set `FLEETVIEW_CA_FILE` in
 `/etc/fleetview-agent/agent.env` (Linux) or
-`%ProgramData%\fleetview-agent\agent.env` (Windows), then restart the
-service:
+`%ProgramData%\fleetview-agent\agent.env` (Windows) to its path before
+starting the service — this is only worth doing if you don't want to trust
+the installer's own one-time bootstrap fetch of `/install/ca.crt`; a
+normal install doesn't need it.
 
-```bash
-FLEETVIEW_CA_FILE=/etc/fleetview-agent/fleetview-ca.crt
-```
-
-This validates the server's certificate against that specific CA — real
-authentication, not just encryption, and it stops working correctly (the
-right failure mode) if a certificate ever doesn't chain to it.
-
-**Option B — skip validation entirely.** Set
-`FLEETVIEW_ALLOW_INSECURE_TLS=true` in the agent's config instead. Traffic
-is still encrypted, but the agent no longer verifies it's actually talking
-to your server rather than something else on the network path — only use
-this if distributing the CA file per Option A isn't practical.
-
-For your own browser, importing `fleetview-ca.crt` into your OS or
-browser's trust store as a trusted root removes the certificate warning
-the same way Option A does for agents.
+**Skipping validation entirely** is also still available: set
+`FLEETVIEW_ALLOW_INSECURE_TLS=true` in the agent's config instead of
+`FLEETVIEW_CA_FILE`. Traffic is still encrypted, but the agent no longer
+verifies it's actually talking to your server rather than something else
+on the network path — there's little reason to choose this now that CA
+pinning happens automatically, but it remains available (e.g. if
+`/install/ca.crt` is unreachable for some reason).
 
 ## Notes
 
@@ -107,8 +119,11 @@ the same way Option A does for agents.
   `--forwarded-allow-ips` argument to match.
 - Rotating the certificate (a new `FLEETVIEW_TLS_HOSTNAME`, or just
   wanting a fresh one) means removing the `fleetview-caddy-data` volume
-  and letting Caddy regenerate its CA — which means re-running step 3 on
-  every agent afterward, since the old CA file no longer matches.
+  and letting Caddy regenerate its CA. Existing agents keep the old
+  `FLEETVIEW_CA_FILE` they were installed with, so the old CA no longer
+  matches theirs — re-run the install command (or manually replace
+  `ca.crt` and restart the service) on each one afterward. New installs
+  after the rotation pick up the new CA automatically.
 - This only covers agent↔server traffic. It doesn't change anything about
   `ADMIN_TOKEN`, database credentials, or any other secret — keep those
   handled the way the rest of the README describes.
