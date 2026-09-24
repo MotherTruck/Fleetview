@@ -16,7 +16,11 @@ import (
 
 func testClient(t *testing.T, serverURL string) *client.Client {
 	t.Helper()
-	return client.New(config.Config{ServerURL: serverURL, RequestTimeout: 5 * time.Second}, model.State{})
+	api, err := client.New(config.Config{ServerURL: serverURL, RequestTimeout: 5 * time.Second}, model.State{})
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+	return api
 }
 
 func TestStageUpgradeVerifiesChecksum(t *testing.T) {

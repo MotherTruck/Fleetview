@@ -185,7 +185,10 @@ func uninstallService(configPath, uninstallCode string) error {
 		if code == "" {
 			code = promptUninstallCode()
 		}
-		api := client.New(cfg, state)
+		api, apiErr := client.New(cfg, state)
+		if apiErr != nil {
+			return fmt.Errorf("configure server connection: %w", apiErr)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.RequestTimeout)
 		verifyErr := api.VerifyUninstall(ctx, code)
 		cancel()

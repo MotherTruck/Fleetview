@@ -25,7 +25,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.16.0"
+var version = "0.17.0"
 
 const serviceName = "fleetview-agent"
 
@@ -79,7 +79,10 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
-	api := client.New(cfg, state)
+	api, err := client.New(cfg, state)
+	if err != nil {
+		return fmt.Errorf("configure server connection: %w", err)
+	}
 
 	if state.DeviceID == "" || state.AgentToken == "" {
 		if cfg.EnrollmentToken == "" {

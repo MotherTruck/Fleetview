@@ -1,0 +1,8 @@
+{
+	admin off
+}
+
+{$FLEETVIEW_TLS_HOSTNAME}:8443 {
+	tls internal
+	reverse_proxy server:8080
+}

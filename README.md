@@ -6,6 +6,10 @@ This repository is the project's home going forward, starting from a snapshot of
 
 The endpoint adapters support Arch Linux/CachyOS through pacman, Debian/Ubuntu through APT, and Windows through winget/Windows Update. The pacman scan path uses `checkupdates`, avoiding the unsupported partial-upgrade state caused by `pacman -Sy`.
 
+## Included in version 0.17.0
+
+- **Encrypt agent↔server traffic**: an optional `tls` Compose profile (`docker compose --profile tls up -d`) adds a [Caddy](https://caddyserver.com/) reverse proxy in front of the server, terminating HTTPS with a certificate from Caddy's own private CA — a public CA like Let's Encrypt won't issue a certificate for the LAN IP or private hostname this dashboard is normally reached at. Agents can validate that certificate two ways: `FLEETVIEW_CA_FILE` pins the specific CA (real authentication, not just encryption), or `FLEETVIEW_ALLOW_INSECURE_TLS=true` skips validation entirely for a quicker but weaker setup. Off by default; existing plain-HTTP installs are unaffected until you opt in. See [`docs/TLS.md`](docs/TLS.md) for the full walkthrough, including why a fixed internal address is trusted for forwarded-header purposes so login-throttling by source IP keeps working correctly once traffic is proxied.
+
 ## Included in version 0.16.0
 
 - Fixed "Copy command" on the Agent enrollment panel doing nothing on a plain-HTTP dashboard (the normal way this is reached on a LAN): `navigator.clipboard` only works in a secure context (HTTPS or localhost), so it now falls back to the older `execCommand("copy")` approach when that API isn't available. Added an **Approve all** button next to Deploy approved patches, so reviewing a long list of pending patches one at a time isn't required.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,10 +23,31 @@ type Client struct {
 	state   model.State
 }
 
-func New(cfg config.Config, state model.State) *Client {
+// New builds the HTTP client the agent uses for every server request. TLS
+// verification is on by default; FLEETVIEW_CA_FILE trusts one additional
+// private CA (for a self-signed/internal-CA server, e.g. behind the
+// project's optional Caddy TLS profile — see docs/TLS.md) without disabling
+// verification entirely, which FLEETVIEW_ALLOW_INSECURE_TLS does and should
+// be a last resort.
+func New(cfg config.Config, state model.State) (*Client, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: cfg.AllowInsecureTLS} // #nosec G402 -- explicit opt-in for test environments
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read FLEETVIEW_CA_FILE: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("FLEETVIEW_CA_FILE does not contain a valid PEM certificate")
+		}
+		tlsConfig.RootCAs = pool
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: cfg.AllowInsecureTLS} // #nosec G402 -- explicit opt-in for test environments
-	return &Client{baseURL: cfg.ServerURL, http: &http.Client{Timeout: cfg.RequestTimeout, Transport: transport}, state: state}
+	transport.TLSClientConfig = tlsConfig
+	return &Client{baseURL: cfg.ServerURL, http: &http.Client{Timeout: cfg.RequestTimeout, Transport: transport}, state: state}, nil
 }
 
 func LoadState(path string) (model.State, error) {

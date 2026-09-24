@@ -18,6 +18,7 @@ type Config struct {
 	JobPollInterval     time.Duration
 	RequestTimeout      time.Duration
 	AllowInsecureTLS    bool
+	CAFile              string
 }
 
 func Load(path string) (Config, error) {
@@ -74,6 +75,7 @@ func Load(path string) (Config, error) {
 		JobPollInterval:  parseSeconds("FLEETVIEW_JOB_POLL_SECONDS", "EPC_JOB_POLL_SECONDS", 10),
 		RequestTimeout:   parseSeconds("FLEETVIEW_REQUEST_TIMEOUT_SECONDS", "EPC_REQUEST_TIMEOUT_SECONDS", 60),
 		AllowInsecureTLS: allowInsecure,
+		CAFile:           lookup("FLEETVIEW_CA_FILE", ""),
 	}
 	if result.ServerURL == "" {
 		return Config{}, fmt.Errorf("FLEETVIEW_SERVER_URL is required")

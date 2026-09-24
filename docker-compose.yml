@@ -33,6 +33,13 @@ services:
       TRUSTED_PROXY_COUNT: "0"
       METRICS_RETENTION_DAYS: "7"
       FLEETVIEW_COOKIE_SECURE: ${FLEETVIEW_COOKIE_SECURE:-false}
+    # --forwarded-allow-ips always includes the caddy service's static IP
+    # below so login-throttle-by-source-IP still works correctly when the
+    # tls profile is enabled (otherwise every request would appear to come
+    # from caddy's own IP once it's proxying). Harmless when caddy isn't
+    # running: that address is simply unused, and it's only reachable from
+    # other containers on the internal frontend network, never from outside.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1,172.28.0.10"]
     ports:
       - "${FLEETVIEW_BIND_ADDRESS:-${EPC_BIND_ADDRESS:-127.0.0.1}}:${FLEETVIEW_PORT:-${EPC_PORT:-8080}}:8080"
     healthcheck:
@@ -44,10 +51,40 @@ services:
       - frontend
       - backend
 
+  # Optional TLS termination for agent<->server traffic, encrypting it in
+  # transit. Off by default; enable with `docker compose --profile tls up -d`
+  # (or COMPOSE_PROFILES=tls in .env) after setting FLEETVIEW_TLS_HOSTNAME.
+  # Caddy mints its own private CA and a leaf certificate for that
+  # hostname/IP on first start (see docs/TLS.md) rather than using a public
+  # CA like Let's Encrypt, since this is normally reached by a LAN IP or
+  # private hostname, which public CAs won't issue certificates for at all.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ["tls"]
+    depends_on:
+      - server
+    environment:
+      FLEETVIEW_TLS_HOSTNAME: ${FLEETVIEW_TLS_HOSTNAME:?Set FLEETVIEW_TLS_HOSTNAME in .env to use the tls profile — the LAN IP or hostname agents and browsers will connect to}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - fleetview-caddy-data:/data
+      - fleetview-caddy-config:/config
+    ports:
+      - "${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}:${FLEETVIEW_TLS_PORT:-8443}:8443"
+    networks:
+      frontend:
+        ipv4_address: 172.28.0.10
+
 volumes:
   fleetview-postgres:
+  fleetview-caddy-data:
+  fleetview-caddy-config:
 
 networks:
   frontend:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   backend:
     internal: true
