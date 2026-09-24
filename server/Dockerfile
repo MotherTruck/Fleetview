@@ -36,6 +36,8 @@ COPY agent /opt/fleetview-install/source/agent
 COPY scripts/uninstall-agent.sh /opt/fleetview-install/source/scripts/uninstall-agent.sh
 COPY scripts/install-agent.ps1 /opt/fleetview-install/source/scripts/install-agent.ps1
 COPY scripts/uninstall-agent.ps1 /opt/fleetview-install/source/scripts/uninstall-agent.ps1
+COPY scripts/upgrade-agent-in-place.sh /opt/fleetview-install/source/scripts/upgrade-agent-in-place.sh
+COPY scripts/upgrade-agent-in-place.ps1 /opt/fleetview-install/source/scripts/upgrade-agent-in-place.ps1
 COPY scripts/remote-install-linux.sh /opt/fleetview-install/install-linux.sh
 RUN python -c "import tarfile; t=tarfile.open('/opt/fleetview-install/agent-source.tar.gz','w:gz'); t.add('/opt/fleetview-install/source/agent',arcname='agent'); t.add('/opt/fleetview-install/source/scripts',arcname='scripts'); t.close()" \
     && chmod 0644 /opt/fleetview-install/agent-source.tar.gz /opt/fleetview-install/install-linux.sh
