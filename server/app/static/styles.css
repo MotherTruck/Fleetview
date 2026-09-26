@@ -42,6 +42,7 @@ button.secondary { background: var(--raised); color: var(--soft); border: 1px so
 .page.active { display: block; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .metrics.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.metrics.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .metrics article, .panel { background: var(--panel); border: 1px solid var(--border); box-shadow: 0 14px 40px rgba(0,0,0,.17); }
 .metrics article { padding: 20px; border-radius: 14px; }
 .metrics span { display: block; color: var(--muted); font-size: .8rem; margin-bottom: 7px; }
@@ -213,7 +214,7 @@ code { padding: 2px 5px; border-radius: 5px; color: var(--accent); background: v
 @media (max-width: 760px) {
   header { align-items: start; flex-direction: column; }
   .header-actions { flex-wrap: wrap; }
-  .metrics, .metrics.five { grid-template-columns: repeat(2,1fr); }
+  .metrics, .metrics.five, .metrics.six { grid-template-columns: repeat(2,1fr); }
   .devices { grid-template-columns: 1fr; }
   .monitor-devices { grid-template-columns: 1fr; }
   .posture-grid, .inventory-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

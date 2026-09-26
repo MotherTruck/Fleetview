@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.20.0"
+var version = "0.21.0"
 
 const serviceName = "fleetview-agent"
 
@@ -267,6 +267,7 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 			}
 		}
 		if err == nil {
+			report.ListeningPorts = vulnerability.ListeningPorts(ctx)
 			err = api.ReportVulnerabilities(ctx, report)
 		}
 		if err == nil {

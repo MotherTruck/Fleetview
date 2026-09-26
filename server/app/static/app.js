@@ -486,6 +486,12 @@ function severityPill(severity) {
   return `<span class="pill severity-${normalized.toLowerCase()}">${escapeHtml(normalized)}</span>`;
 }
 
+function exposurePill(item) {
+  if (item.exposure !== "listening") return '<span class="pill severity-unknown" title="No listening process name matched this package">Unknown</span>';
+  const detail = (item.exposure_detail || []).join(", ");
+  return `<span class="pill severity-high" title="Listening on ${escapeHtml(detail)}">Listening</span>`;
+}
+
 function flagLabel(value) {
   if (value === true) return '<span class="pill succeeded">Yes</span>';
   if (value === false) return '<span class="pill">No</span>';
@@ -881,13 +887,15 @@ function renderPatching() {
     result.vulnerabilities += device.vulnerability_count || 0;
     result.critical += severities.CRITICAL || 0;
     result.high += severities.HIGH || 0;
+    result.exposed += device.vulnerability_exposed_count || 0;
     return result;
-  }, { updates: 0, vulnerabilities: 0, critical: 0, high: 0 });
+  }, { updates: 0, vulnerabilities: 0, critical: 0, high: 0, exposed: 0 });
   $("#patchDeviceCount").textContent = state.devices.length;
   $("#updateCount").textContent = totals.updates;
   $("#vulnerabilityCount").textContent = totals.vulnerabilities;
   $("#criticalCount").textContent = totals.critical;
   $("#highCount").textContent = totals.high;
+  $("#exposedCount").textContent = totals.exposed;
 
   $("#patchDevices").innerHTML = state.devices.length ? state.devices.map((device) => {
     const severities = device.vulnerability_severity_counts || {};
@@ -901,6 +909,7 @@ function renderPatching() {
           <div><small>Needed patches</small><strong>${device.update_count || 0}</strong></div>
           <div><small>Vulnerabilities</small><strong>${device.vulnerability_count || 0}</strong></div>
           <div><small>Critical / High</small><strong>${severities.CRITICAL || 0} / ${severities.HIGH || 0}</strong></div>
+          <div><small title="Vulnerable packages with a process actually listening on the network">Exposed</small><strong>${device.vulnerability_exposed_count || 0}</strong></div>
           <div><small>Last patched</small><strong>${relativeTime(device.last_patched_at)}</strong></div>
         </div>
         <div class="device-actions">
@@ -1257,6 +1266,7 @@ const REPORT_FIELDS = [
   { key: "vulnerability_count", label: "Vulnerabilities", value: (d) => d.vulnerability_count ?? 0, default: true },
   { key: "critical_vulns", label: "Critical vulnerabilities", value: (d) => d.vulnerability_severity_counts?.CRITICAL || 0 },
   { key: "high_vulns", label: "High vulnerabilities", value: (d) => d.vulnerability_severity_counts?.HIGH || 0 },
+  { key: "exposed_vulns", label: "Exposed vulnerabilities (listening)", value: (d) => d.vulnerability_exposed_count ?? 0 },
   { key: "installed_package_count", label: "Installed packages", value: (d) => d.installed_package_count ?? 0 },
   { key: "last_scan_at", label: "Last scan", value: (d) => fullDate(d.last_scan_at) },
   { key: "last_vulnerability_scan_at", label: "Last vulnerability scan", value: (d) => fullDate(d.last_vulnerability_scan_at) },
@@ -1622,13 +1632,13 @@ function renderDeviceDetails() {
       ? "Arch requires approval of all pending patches before a full system upgrade. Partial upgrades are blocked."
       : "New versions need fresh approval after a scan. Debian checks the transaction for unapproved dependencies. Windows Update entries without winget IDs cannot be deployed here.";
   } else if (state.detailTab === "vulnerabilities") {
-    $("#detailTableHead").innerHTML = "<tr><th>Severity</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed version</th><th>Status</th></tr>";
+    $("#detailTableHead").innerHTML = "<tr><th>Severity</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed version</th><th>Status</th><th>Exposure</th></tr>";
     $("#detailTableBody").innerHTML = visible.length ? visible.map((item) => {
       const url = safeUrl(item.primary_url);
       const id = url === "#" ? escapeHtml(item.vulnerability_id) : `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.vulnerability_id)}</a>`;
-      return `<tr title="${escapeHtml(item.title || "")}"><td>${severityPill(item.severity)}</td><td>${id}</td><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.fixed_version || "Not available")}</code></td><td>${escapeHtml(item.status)}</td></tr>`;
-    }).join("") : '<tr><td colspan="6" class="empty">No vulnerabilities match this view. Run a vulnerability scan if one has not completed yet.</td></tr>';
-    $("#detailFootnote").textContent = `Scanner: ${device.vulnerability_scanner || "Not yet scanned"} ${device.vulnerability_scanner_version || ""} · Last scan: ${fullDate(device.last_vulnerability_scan_at)}`;
+      return `<tr title="${escapeHtml(item.title || "")}"><td>${severityPill(item.severity)}</td><td>${id}</td><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.fixed_version || "Not available")}</code></td><td>${escapeHtml(item.status)}</td><td>${exposurePill(item)}</td></tr>`;
+    }).join("") : '<tr><td colspan="7" class="empty">No vulnerabilities match this view. Run a vulnerability scan if one has not completed yet.</td></tr>';
+    $("#detailFootnote").textContent = `Scanner: ${device.vulnerability_scanner || "Not yet scanned"} ${device.vulnerability_scanner_version || ""} · Last scan: ${fullDate(device.last_vulnerability_scan_at)} · "Listening" means a process matching the vulnerable package name is bound to a network port on this device -- a heuristic name match, not a guarantee.`;
   } else {
     $("#detailTableHead").innerHTML = "<tr><th>Package</th><th>Installed version</th><th>Architecture</th><th>Source</th></tr>";
     $("#detailTableBody").innerHTML = visible.length ? visible.map((item) => `

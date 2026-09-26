@@ -60,6 +60,17 @@ type VulnerabilityReport struct {
 	ScannerVersion  string          `json:"scanner_version"`
 	ScannedAt       time.Time       `json:"scanned_at"`
 	Vulnerabilities []Vulnerability `json:"vulnerabilities"`
+	ListeningPorts  []ListeningPort `json:"listening_ports"`
+}
+
+// ListeningPort is a process found bound to a network port at scan time,
+// gathered alongside the vulnerability scan so the server can flag which
+// vulnerable packages are actually network-facing versus only ever loaded
+// as a library dependency.
+type ListeningPort struct {
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Process  string `json:"process"`
 }
 
 type MetricsReport struct {

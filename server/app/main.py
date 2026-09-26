@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="FleetView", version="0.20.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="FleetView", version="0.21.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(deployment_router)
 app.include_router(integrations_router)
@@ -72,6 +72,51 @@ INSTALL_DIR = Path("/opt/fleetview-install")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _process_match_candidates(process: str) -> set[str]:
+    # Unix daemons conventionally add a trailing "d" to the thing they run
+    # (sshd for ssh, mysqld for mysql, crond for cron) while the package
+    # name usually doesn't, so stripping it catches the single most common
+    # package-vs-process naming mismatch without a hardcoded name table.
+    candidates = {process}
+    if len(process) >= 4 and process.endswith("d"):
+        candidates.add(process[:-1])
+    return candidates
+
+
+def annotate_exposure(vulnerabilities: list[dict], listening_ports: list[dict]) -> list[dict]:
+    """Tag each finding with whether its package has a process actually
+    listening on the network, versus one that's only ever loaded as a
+    library dependency -- a materially different risk. This is a name
+    heuristic, not a guarantee, so it's shown as a plain "listening" tag
+    with the matched ports rather than a fabricated confidence score.
+    """
+    ports_by_candidate: dict[str, list[dict]] = {}
+    for port in listening_ports:
+        process = str(port.get("process", "")).strip().lower()
+        if not process or process == "unknown":
+            continue
+        for candidate in _process_match_candidates(process):
+            ports_by_candidate.setdefault(candidate, []).append(port)
+
+    annotated = []
+    for finding in vulnerabilities:
+        package = str(finding.get("package", "")).strip().lower()
+        matches: list[dict] = []
+        if package:
+            for candidate, ports in ports_by_candidate.items():
+                if len(candidate) >= 3 and (candidate in package or package in candidate):
+                    matches.extend(ports)
+        finding = dict(finding)
+        if matches:
+            finding["exposure"] = "listening"
+            finding["exposure_detail"] = sorted({f"{port.get('protocol', 'tcp')}/{port.get('port')}" for port in matches})
+        else:
+            finding["exposure"] = "unknown"
+            finding["exposure_detail"] = []
+        annotated.append(finding)
+    return annotated
+
+
 def device_view(device: Device, fleet_settings: FleetSettings, include_packages: bool = True) -> dict:
     online = as_utc(device.last_seen) >= utcnow() - timedelta(minutes=2)
     security = (device.inventory or {}).get("_security", {})
@@ -83,11 +128,14 @@ def device_view(device: Device, fleet_settings: FleetSettings, include_packages:
         for key, value in (device.inventory or {}).items()
         if not key.startswith("_")
     }
+    listening_ports = security.get("listening_ports", []) if isinstance(security, dict) else []
     vulnerabilities = security.get("vulnerabilities", []) if isinstance(security, dict) else []
+    vulnerabilities = annotate_exposure(vulnerabilities, listening_ports)
     severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
     for finding in vulnerabilities:
         severity = str(finding.get("severity", "UNKNOWN")).upper()
         severity_counts[severity if severity in severity_counts else "UNKNOWN"] += 1
+    exposed_count = sum(1 for finding in vulnerabilities if finding.get("exposure") == "listening")
     result = {
         "id": device.id,
         "hostname": device.hostname,
@@ -109,6 +157,7 @@ def device_view(device: Device, fleet_settings: FleetSettings, include_packages:
         "installed_package_count": len(device.installed_packages or []),
         "vulnerability_count": len(vulnerabilities),
         "vulnerability_severity_counts": severity_counts,
+        "vulnerability_exposed_count": exposed_count,
         "last_vulnerability_scan_at": security.get("scanned_at") if isinstance(security, dict) else None,
         "vulnerability_scanner": security.get("scanner") if isinstance(security, dict) else None,
         "vulnerability_scanner_version": security.get("scanner_version") if isinstance(security, dict) else None,
@@ -120,6 +169,7 @@ def device_view(device: Device, fleet_settings: FleetSettings, include_packages:
         result["installed_packages"] = device.installed_packages or []
         result["available_updates"] = device.available_updates or []
         result["vulnerabilities"] = vulnerabilities
+        result["listening_ports"] = listening_ports
     return result
 
 
@@ -403,6 +453,7 @@ def report_vulnerabilities(
         "scanner_version": payload.scanner_version,
         "scanned_at": payload.scanned_at.isoformat(),
         "vulnerabilities": [item.model_dump(mode="json") for item in payload.vulnerabilities],
+        "listening_ports": [item.model_dump(mode="json") for item in payload.listening_ports],
     }
     device.inventory = inventory
     device.last_seen = utcnow()

@@ -48,11 +48,18 @@ class VulnerabilityFinding(BaseModel):
     target: str = Field(default="", max_length=255)
 
 
+class ListeningPort(BaseModel):
+    port: int = Field(ge=1, le=65535)
+    protocol: str = Field(default="tcp", max_length=10)
+    process: str = Field(default="unknown", max_length=255)
+
+
 class VulnerabilityReport(BaseModel):
     scanner: str = Field(default="unknown", max_length=50)
     scanner_version: str = Field(default="unknown", max_length=100)
     scanned_at: datetime
     vulnerabilities: list[VulnerabilityFinding] = Field(default_factory=list)
+    listening_ports: list[ListeningPort] = Field(default_factory=list, max_length=2000)
 
 
 class MetricsReport(BaseModel):

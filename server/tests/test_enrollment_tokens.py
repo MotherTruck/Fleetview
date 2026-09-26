@@ -309,8 +309,10 @@ class EnrollmentFlowTests(unittest.TestCase):
                 payload, x_device_id=enrolled.device_id, authorization=f"Bearer {enrolled.agent_token}", db=db
             )
 
-    def report_vulnerabilities(self, enrolled, findings):
-        payload = self.VulnerabilityReport(scanned_at=self.utcnow(), vulnerabilities=findings)
+    def report_vulnerabilities(self, enrolled, findings, listening_ports=None):
+        payload = self.VulnerabilityReport(
+            scanned_at=self.utcnow(), vulnerabilities=findings, listening_ports=listening_ports or []
+        )
         with self.SessionLocal() as db:
             return self.main.report_vulnerabilities(
                 payload, x_device_id=enrolled.device_id, authorization=f"Bearer {enrolled.agent_token}", db=db
@@ -361,6 +363,51 @@ class EnrollmentFlowTests(unittest.TestCase):
         no_crit_high = sum(1 for s in todays_snapshots if s.critical_vulnerability_count == 0 and s.high_vulnerability_count == 0)
         self.assertEqual(entry["no_critical_high_percent"], round(no_crit_high / len(todays_snapshots) * 100, 1))
         self.assertLess(entry["no_critical_high_percent"], 100.0, "this device's CRITICAL finding must lower the fleet-wide figure")
+
+    def test_vulnerability_exposure_flags_packages_with_a_listening_process(self):
+        created = self.create_token(label="exposure-device")
+        enrolled = self.enroll(created["token"], hostname="exposure-host")
+
+        self.report_vulnerabilities(
+            enrolled,
+            [
+                {"vulnerability_id": "CVE-100", "package": "openssh-server", "severity": "HIGH"},
+                {"vulnerability_id": "CVE-200", "package": "some-library", "severity": "LOW"},
+            ],
+            listening_ports=[
+                {"port": 22, "protocol": "tcp", "process": "sshd"},
+                {"port": 68, "protocol": "udp", "process": "dhclient"},
+            ],
+        )
+
+        with self.SessionLocal() as db:
+            device = self.main.get_device(enrolled.device_id, db)
+
+        findings = {item["package"]: item for item in device["vulnerabilities"]}
+        self.assertEqual(findings["openssh-server"]["exposure"], "listening")
+        self.assertEqual(findings["openssh-server"]["exposure_detail"], ["tcp/22"])
+        self.assertEqual(findings["some-library"]["exposure"], "unknown")
+        self.assertEqual(findings["some-library"]["exposure_detail"], [])
+        self.assertEqual(device["vulnerability_exposed_count"], 1)
+        self.assertEqual(len(device["listening_ports"]), 2)
+
+        with self.SessionLocal() as db:
+            summary = next(item for item in self.main.list_devices(db) if item["id"] == enrolled.device_id)
+        self.assertEqual(summary["vulnerability_exposed_count"], 1)
+        self.assertNotIn("vulnerabilities", summary, "list view must stay lightweight and not include full findings")
+        self.assertNotIn("listening_ports", summary)
+
+    def test_vulnerability_exposure_defaults_to_unknown_with_no_listening_ports(self):
+        created = self.create_token(label="no-ports-device")
+        enrolled = self.enroll(created["token"], hostname="no-ports-host")
+
+        self.report_vulnerabilities(enrolled, [{"vulnerability_id": "CVE-300", "package": "curl", "severity": "LOW"}])
+
+        with self.SessionLocal() as db:
+            device = self.main.get_device(enrolled.device_id, db)
+        self.assertEqual(device["vulnerabilities"][0]["exposure"], "unknown")
+        self.assertEqual(device["vulnerability_exposed_count"], 0)
+        self.assertEqual(device["listening_ports"], [])
 
     def test_new_device_uses_fleet_default_intervals_until_overridden(self):
         created = self.create_token(label="fleet-defaults-device")
