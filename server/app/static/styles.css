@@ -194,6 +194,7 @@ dialog label { display: grid; gap: 8px; color: var(--soft); }
 .toggle-setting input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .form-note { margin-top: 12px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
+.integration-error { color: #ff9c9c; }
 .add-device-layout { display: grid; grid-template-columns: minmax(260px, .75fr) minmax(0, 1.25fr); gap: 22px; }
 .add-device-form { display: grid; align-content: start; gap: 12px; }
 .install-output { min-width: 0; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }

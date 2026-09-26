@@ -24,6 +24,7 @@ const state = {
   patchSchedules: {},
   editingPackageId: null,
   publishedAgentVersion: null,
+  integrations: [],
   liveDeviceIds: new Set(),
   statusSocket: null,
   metricsSocket: null,
@@ -255,6 +256,7 @@ function applyPermissions() {
   document.body.dataset.role = role;
   document.body.classList.toggle("signed-out", !state.user || state.user.must_change_password);
   $("[data-page='agent']").hidden = role !== "admin";
+  $("[data-page='integrations']").hidden = role !== "admin";
   $("[data-page='deploy']").hidden = role === "viewer" || !role;
   document.querySelectorAll("[data-admin-only]").forEach(node => node.hidden = role !== "admin");
   $("#removeDeviceButton").hidden = role !== "admin";
@@ -492,6 +494,7 @@ function flagLabel(value) {
 
 function setPage(page) {
   if (page === "agent" && state.user?.role !== "admin") page = "dashboard";
+  if (page === "integrations" && state.user?.role !== "admin") page = "dashboard";
   if (page === "deploy" && state.user?.role === "viewer") page = "dashboard";
   state.page = page;
   document.querySelectorAll("[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === page));
@@ -586,6 +589,147 @@ async function upgradeAgentDevice(id, button) {
   } catch (error) { showNotice(error.message, true); }
   finally { if (button) button.disabled = false; }
 }
+
+function integrationSummary(item) {
+  const data = item.cached_data || {};
+  if (item.kind === "proxmox") {
+    const guests = [
+      ...(Array.isArray(data.vms) ? data.vms : []).map((guest) => ({ ...guest, type: "VM" })),
+      ...(Array.isArray(data.containers) ? data.containers : []).map((guest) => ({ ...guest, type: "CT" })),
+    ];
+    if (!guests.length) return "";
+    return `<div class="table-wrap"><table><thead><tr><th>Type</th><th>Name</th><th>Node</th><th>Status</th></tr></thead><tbody>${
+      guests.slice(0, 25).map((guest) => `<tr><td>${escapeHtml(guest.type)}</td><td>${escapeHtml(guest.name || guest.vmid)}</td><td>${escapeHtml(guest.node || "")}</td><td><span class="pill ${guest.status === "running" ? "succeeded" : "unknown"}">${escapeHtml(guest.status || "unknown")}</span></td></tr>`).join("")
+    }</tbody></table></div>${guests.length > 25 ? `<p class="form-note">${guests.length - 25} more not shown.</p>` : ""}`;
+  }
+  if (item.kind === "opnsense") {
+    const leases = Array.isArray(data.dhcp_leases) ? data.dhcp_leases : [];
+    if (!leases.length) return "";
+    return `<div class="table-wrap"><table><thead><tr><th>IP</th><th>MAC</th><th>Hostname</th><th>State</th></tr></thead><tbody>${
+      leases.slice(0, 25).map((lease) => `<tr><td>${escapeHtml(lease.ip || "")}</td><td><code>${escapeHtml(lease.mac || "")}</code></td><td>${escapeHtml(lease.hostname || "")}</td><td>${escapeHtml(lease.state || "")}</td></tr>`).join("")
+    }</tbody></table></div>${leases.length > 25 ? `<p class="form-note">${leases.length - 25} more not shown.</p>` : ""}`;
+  }
+  return "";
+}
+
+function renderIntegrations() {
+  const container = $("#integrationCards");
+  if (!container) return;
+  container.innerHTML = state.integrations.length ? state.integrations.map((item) => {
+    const statusPill = item.last_sync_error ? '<span class="pill failed">Sync failed</span>'
+      : item.last_synced_at ? '<span class="pill succeeded">Synced</span>'
+      : '<span class="pill pending">Never synced</span>';
+    const kindLabel = item.kind === "proxmox" ? "Proxmox VE" : item.kind === "opnsense" ? "OPNsense" : item.kind;
+    return `<article class="inventory-card">
+      <div class="device-top">
+        <div><h3>${escapeHtml(item.name)}</h3><div class="device-subtitle">${escapeHtml(kindLabel)} · ${escapeHtml(item.base_url)}</div></div>
+        ${statusPill}
+      </div>
+      ${item.last_sync_error ? `<p class="form-note integration-error">${escapeHtml(item.last_sync_error)}</p>` : ""}
+      ${integrationSummary(item)}
+      <p class="scan-note">Last synced ${relativeTime(item.last_synced_at)}</p>
+      <div class="device-actions">
+        <button type="button" class="secondary" data-integration-sync="${escapeHtml(item.id)}">Sync now</button>
+        <button type="button" class="secondary" data-integration-edit="${escapeHtml(item.id)}">Edit</button>
+        <button type="button" class="danger" data-integration-delete="${escapeHtml(item.id)}">Delete</button>
+      </div>
+    </article>`;
+  }).join("") : '<div class="empty">No integrations configured yet.</div>';
+}
+
+function resetIntegrationForm() {
+  $("#integrationForm").reset();
+  $("#integrationId").value = "";
+  $("#integrationKind").value = "proxmox";
+  $("#proxmoxCredentialFields").hidden = false;
+  $("#opnsenseCredentialFields").hidden = true;
+  $("#integrationVerifyTls").checked = true;
+  $("#integrationSubmit").textContent = "Add integration";
+  $("#integrationCancelEdit").hidden = true;
+}
+
+function startEditIntegration(id) {
+  const item = state.integrations.find((entry) => entry.id === id);
+  if (!item) return;
+  $("#integrationId").value = item.id;
+  $("#integrationKind").value = item.kind;
+  $("#integrationName").value = item.name;
+  $("#integrationBaseUrl").value = item.base_url;
+  $("#integrationVerifyTls").checked = item.verify_tls;
+  $("#proxmoxCredentialFields").hidden = item.kind !== "proxmox";
+  $("#opnsenseCredentialFields").hidden = item.kind !== "opnsense";
+  $("#proxmoxTokenId").value = "";
+  $("#proxmoxTokenSecret").value = "";
+  $("#opnsenseApiKey").value = "";
+  $("#opnsenseApiSecret").value = "";
+  $("#integrationSubmit").textContent = "Save changes";
+  $("#integrationCancelEdit").hidden = false;
+  setPage("integrations");
+  $("#integrationName").focus();
+}
+
+$("#integrationKind").addEventListener("change", () => {
+  const kind = $("#integrationKind").value;
+  $("#proxmoxCredentialFields").hidden = kind !== "proxmox";
+  $("#opnsenseCredentialFields").hidden = kind !== "opnsense";
+});
+
+$("#integrationCancelEdit").addEventListener("click", resetIntegrationForm);
+
+$("#integrationForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const id = $("#integrationId").value;
+  const kind = $("#integrationKind").value;
+  const rawCredentials = kind === "proxmox"
+    ? { token_id: $("#proxmoxTokenId").value.trim(), token_secret: $("#proxmoxTokenSecret").value }
+    : { api_key: $("#opnsenseApiKey").value.trim(), api_secret: $("#opnsenseApiSecret").value };
+  // Blank fields mean "keep the existing credentials" on an edit; never send them as literal empty-string overwrites.
+  const credentials = Object.fromEntries(Object.entries(rawCredentials).filter(([, value]) => value));
+  const payload = {
+    kind, name: $("#integrationName").value.trim(), base_url: $("#integrationBaseUrl").value.trim(),
+    verify_tls: $("#integrationVerifyTls").checked, credentials,
+  };
+  const button = $("#integrationSubmit");
+  button.disabled = true;
+  try {
+    if (id) {
+      await api(`/api/v1/admin/integrations/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      showNotice("Integration updated.");
+    } else {
+      await api("/api/v1/admin/integrations", { method: "POST", body: JSON.stringify(payload) });
+      showNotice("Integration added.");
+    }
+    resetIntegrationForm();
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { button.disabled = false; }
+});
+
+$("#integrationCards").addEventListener("click", async (event) => {
+  const syncButton = event.target.closest("[data-integration-sync]");
+  const editButton = event.target.closest("[data-integration-edit]");
+  const deleteButton = event.target.closest("[data-integration-delete]");
+  if (syncButton) {
+    syncButton.disabled = true;
+    try {
+      await api(`/api/v1/admin/integrations/${syncButton.dataset.integrationSync}/sync`, { method: "POST" });
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+    finally { syncButton.disabled = false; }
+  } else if (editButton) {
+    startEditIntegration(editButton.dataset.integrationEdit);
+  } else if (deleteButton) {
+    const item = state.integrations.find((entry) => entry.id === deleteButton.dataset.integrationDelete);
+    if (!item || !confirm(`Remove the "${item.name}" integration? This only removes it from FleetView; nothing changes on ${item.name} itself.`)) return;
+    deleteButton.disabled = true;
+    try {
+      await api(`/api/v1/admin/integrations/${deleteButton.dataset.integrationDelete}`, { method: "DELETE" });
+      showNotice("Integration removed.");
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+    finally { deleteButton.disabled = false; }
+  }
+});
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
@@ -1192,7 +1336,7 @@ function render() {
   renderJobs();
   renderEnrollmentTokens();
   renderInstallCommand();
-  if (state.user?.role === "admin") { renderAgentSettingsOptions(); renderAgentVersionsTable(); }
+  if (state.user?.role === "admin") { renderAgentSettingsOptions(); renderAgentVersionsTable(); renderIntegrations(); }
   renderAdmin();
   applyPermissions();
 }
@@ -1558,9 +1702,10 @@ async function refresh() {
       api("/api/v1/admin/packages"),
       state.user.role === "admin" ? api("/api/v1/admin/custom-packages") : Promise.resolve([]),
       state.user.role === "admin" ? api("/api/v1/admin/agent-version").catch(() => null) : Promise.resolve(null),
+      api("/api/v1/admin/integrations").catch(() => []),
     ]);
     if (!state.user || generation !== state.authGeneration) return;
-    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion] = results;
+    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion, state.integrations] = results;
     showNotice(state.devices.length ? "Fleet data is current." : "Server is ready. Enroll the first agent to populate the fleet.");
     $("#refreshState").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     render();

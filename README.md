@@ -6,6 +6,10 @@ This repository is the project's home going forward, starting from a snapshot of
 
 The endpoint adapters support Arch Linux/CachyOS through pacman, Debian/Ubuntu through APT, and Windows through winget/Windows Update. The pacman scan path uses `checkupdates`, avoiding the unsupported partial-upgrade state caused by `pacman -Sy`.
 
+## Included in version 0.19.0
+
+- **Integrations tab (Proxmox VE, OPNsense)**: admin-only connections to other services already running in a home lab, read-only in both directions. Proxmox's VMs/containers and OPNsense's DHCP leases sync automatically every two minutes (and immediately on save), shown as cards with a live status pill; credentials are encrypted at rest with a required `FLEETVIEW_SECRET_KEY` (the one secret in this app that has to be reversible, since it's sent to an external API on every sync, unlike every other secret here which is one-way hashed). A failing integration (wrong credentials, unreachable host) shows a clear per-card error and never affects the rest of the dashboard or other integrations. See [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md).
+
 ## Included in version 0.18.0
 
 - **Live metrics and an interactive terminal**: agents 0.18.0+ keep a second persistent WebSocket connection to the server alongside the existing poll-based job loop (purely additive -- a device with no live connection is still fully manageable through queued jobs exactly as before). It carries a fast metrics sample every ~2s for real-time dashboard tiles and the device Monitoring view (the existing 60s REST-reported history/trend charts are untouched), and an admin-only **Terminal** tab that spawns a real shell on the device (Bash on Linux, PowerShell on Windows via a real ConPTY pseudoconsole) streamed to [xterm.js](https://xtermjs.org/) in the browser -- unlike every other action in this dashboard, this is a live interactive session, not a queued job. Every terminal session is audit-logged, limited to one at a time per device, protected by an Origin check against cross-site WebSocket hijacking, and never auto-reconnects. See [`docs/LIVE.md`](docs/LIVE.md) for the full picture.

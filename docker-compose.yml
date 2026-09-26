@@ -33,6 +33,8 @@ services:
       TRUSTED_PROXY_COUNT: "0"
       METRICS_RETENTION_DAYS: "7"
       FLEETVIEW_COOKIE_SECURE: ${FLEETVIEW_COOKIE_SECURE:-false}
+      # Required only if you configure a Proxmox/OPNsense integration (docs/INTEGRATIONS.md).
+      FLEETVIEW_SECRET_KEY: ${FLEETVIEW_SECRET_KEY:-}
     # --forwarded-allow-ips always includes the caddy service's static IP
     # below so login-throttle-by-source-IP still works correctly when the
     # tls profile is enabled (otherwise every request would appear to come

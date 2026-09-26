@@ -223,6 +223,31 @@ class CustomPackageFile(Base):
     content: Mapped[bytes] = mapped_column(LargeBinary)
 
 
+class Integration(Base):
+    """A configured connection to an external home-lab service (Proxmox,
+    OPNsense, ...). Credentials live only in `encrypted_credentials`
+    (see secrets_crypto.py) -- every other column here is safe to return
+    from the API as-is. `cached_data` is the last successful sync's
+    result, shown immediately on page load rather than live-querying the
+    external API on every request (and so a temporarily-unreachable
+    integration doesn't blank the whole panel).
+    """
+
+    __tablename__ = "integrations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    kind: Mapped[str] = mapped_column(String(20))  # "proxmox" | "opnsense"
+    name: Mapped[str] = mapped_column(String(255))
+    base_url: Mapped[str] = mapped_column(String(500))
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
+    encrypted_credentials: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cached_data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class ComplianceSnapshot(Base):
     """One row per device per UTC day, for Reports' historical trend charts.
 

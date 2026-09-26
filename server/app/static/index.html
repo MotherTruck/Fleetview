@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>FleetView</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.18.0">
+    <link rel="stylesheet" href="/static/styles.css?v=0.19.0">
     <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
   </head>
   <body class="signed-out">
@@ -30,6 +30,7 @@
       <button class="app-tab" data-page="deploy">Deploy</button>
       <button class="app-tab" data-page="reports">Reports</button>
       <button class="app-tab" data-page="agent">Agent</button>
+      <button class="app-tab" data-page="integrations">Integrations</button>
       <button class="app-tab" data-page="admin">Admin</button>
     </nav>
 
@@ -345,6 +346,42 @@
         </section>
       </section>
 
+      <section class="page" data-page-panel="integrations">
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">HOME LAB</p><h2>Add an integration</h2></div></div>
+          <form id="integrationForm" class="add-device-form">
+            <input type="hidden" id="integrationId" value="">
+            <label>Service
+              <select id="integrationKind" required>
+                <option value="proxmox">Proxmox VE</option>
+                <option value="opnsense">OPNsense</option>
+              </select>
+            </label>
+            <label>Label<input id="integrationName" type="text" maxlength="255" required placeholder="e.g. Home Proxmox"></label>
+            <label>Base URL<input id="integrationBaseUrl" type="url" required placeholder="https://192.168.1.10:8006"></label>
+            <label class="toggle-setting"><input id="integrationVerifyTls" type="checkbox" checked><span>Verify TLS certificate</span></label>
+            <div id="proxmoxCredentialFields" class="settings-grid">
+              <label>API token ID<input id="proxmoxTokenId" type="text" maxlength="255" placeholder="fleetview@pve!token-name" autocomplete="off"></label>
+              <label>API token secret<input id="proxmoxTokenSecret" type="password" maxlength="255" placeholder="Leave blank to keep current" autocomplete="off"></label>
+            </div>
+            <div id="opnsenseCredentialFields" class="settings-grid" hidden>
+              <label>API key<input id="opnsenseApiKey" type="text" maxlength="255" autocomplete="off"></label>
+              <label>API secret<input id="opnsenseApiSecret" type="password" maxlength="255" placeholder="Leave blank to keep current" autocomplete="off"></label>
+            </div>
+            <div class="settings-actions">
+              <button type="submit" id="integrationSubmit">Add integration</button>
+              <button type="button" id="integrationCancelEdit" class="secondary" hidden>Cancel edit</button>
+            </div>
+            <p class="form-note">Proxmox: Datacenter → Permissions → API Tokens (PVEAuditor role is enough to read inventory). OPNsense: System → Access → Users → generate an API key. Credentials are encrypted at rest and never shown again once saved. See <code>docs/INTEGRATIONS.md</code>.</p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">HOME LAB</p><h2>Configured integrations</h2></div></div>
+          <div id="integrationCards" class="inventory-devices"></div>
+        </section>
+      </section>
+
       <section class="page" data-page-panel="admin">
         <section class="panel" id="userManagement" data-admin-only>
           <div class="panel-heading"><div><p class="eyebrow">ACCESS</p><h2>User management</h2></div><button id="reloadUsers" type="button" class="secondary">Refresh users</button></div>
@@ -491,6 +528,6 @@ FLEETVIEW_PORT=8080</code></pre>
 
     <script src="/static/vendor/xterm/xterm.js" defer></script>
     <script src="/static/vendor/xterm/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=0.18.0" defer></script>
+    <script src="/static/app.js?v=0.19.0" defer></script>
   </body>
 </html>

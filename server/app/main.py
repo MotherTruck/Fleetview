@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import os
 from datetime import date, datetime, timedelta, timezone
 import re
@@ -17,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .database import Base, engine, get_db
 from .enrollment import as_utc, token_status
+from .integrations import periodic_sync_loop, router as integrations_router
 from .live import router as live_router, hub as live_hub
 from .models import ComplianceSnapshot, Device, EnrollmentToken, FleetSettings, Job, MetricSample, Package, utcnow
 from .schemas import AgentSettingsUpdate, DeviceReport, EnrollmentTokenCreate, EnrollRequest, EnrollResponse, FleetSettingsUpdate, JobCreate, JobResult, MetricsReport, PackageUpsert, UninstallVerifyRequest, VulnerabilityReport
@@ -26,9 +29,23 @@ from .schemas import VulnerabilityScheduleUpdate
 
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="FleetView", version="0.18.0", docs_url="/api/docs", redoc_url=None)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(periodic_sync_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="FleetView", version="0.19.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(deployment_router)
+app.include_router(integrations_router)
 app.include_router(live_router)
 
 
