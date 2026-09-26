@@ -45,6 +45,14 @@ class DeploymentTests(unittest.TestCase):
                           agent_version="0.16.0", agent_token_hash=token_hash("new-secret")))
             db.add(Device(id="winnew", hostname="winbox", platform="windows", package_manager="winget",
                           agent_version="0.16.0", agent_token_hash=token_hash("win-secret")))
+            db.add(Device(id="netnew", hostname="relay-box", platform="linux", package_manager="apt",
+                          agent_version="0.20.0", agent_token_hash=token_hash("netnew-secret"),
+                          inventory={"mac_addresses": ["aa:bb:cc:dd:ee:ff"]}, last_seen=utcnow()))
+            db.add(Device(id="netnomac", hostname="no-mac-box", platform="linux", package_manager="apt",
+                          agent_version="0.20.0", agent_token_hash=token_hash("netnomac-secret"), last_seen=utcnow()))
+            db.add(Device(id="netoffline", hostname="asleep-box", platform="linux", package_manager="apt",
+                          agent_version="0.20.0", agent_token_hash=token_hash("netoffline-secret"),
+                          inventory={"mac_addresses": ["11:22:33:44:55:66"]}, last_seen=utcnow() - timedelta(minutes=10)))
             db.commit()
         setup = self.client.post("/api/v1/auth/setup", json={
             "admin_token":"legacy-secret", "username":"admin", "password":"long-password-for-tests"})
@@ -196,4 +204,49 @@ class DeploymentTests(unittest.TestCase):
                         files=[("files", ("install.sh", b"hello", "application/octet-stream"))]).status_code, 403)
         self.assertEqual(viewer.post("/api/v1/admin/devices/new/run-command", json={"command":"echo hi", "confirmed":True}).status_code, 403)
         self.assertEqual(viewer.post("/api/v1/admin/devices/new/upgrade-agent").status_code, 403)
+        self.assertEqual(viewer.post("/api/v1/admin/devices/netnew/network-diagnostic", json={"tool":"dns", "target":"example.com"}).status_code, 403)
+        self.assertEqual(viewer.post("/api/v1/admin/devices/netoffline/wake", json={"relay_device_id":"netnew"}).status_code, 403)
         viewer.close()
+
+    def test_network_diagnostic_gates_on_agent_version_and_validates_input(self):
+        old_device = self.client.post("/api/v1/admin/devices/dev/network-diagnostic", json={"tool":"ping", "target":"example.com"})
+        self.assertEqual(old_device.status_code, 409, old_device.text)
+
+        bad_tool = self.client.post("/api/v1/admin/devices/netnew/network-diagnostic", json={"tool":"nmap", "target":"example.com"})
+        self.assertEqual(bad_tool.status_code, 422)
+
+        bad_target = self.client.post("/api/v1/admin/devices/netnew/network-diagnostic", json={"tool":"ping", "target":"-c 100"})
+        self.assertEqual(bad_target.status_code, 422)
+
+        missing_port = self.client.post("/api/v1/admin/devices/netnew/network-diagnostic", json={"tool":"port_check", "target":"example.com"})
+        self.assertEqual(missing_port.status_code, 400)
+
+        ok = self.client.post("/api/v1/admin/devices/netnew/network-diagnostic", json={"tool":"port_check", "target":"example.com", "port":443})
+        self.assertEqual(ok.status_code, 201, ok.text)
+        with self.Session() as db:
+            job = db.get(Job, ok.json()["id"])
+            self.assertEqual(job.type, "NETWORK_DIAGNOSTIC")
+            self.assertEqual(job.options, {"tool":"port_check", "target":"example.com", "port":443})
+
+    def test_wake_on_lan_requires_mac_online_relay_and_agent_version(self):
+        no_mac = self.client.post("/api/v1/admin/devices/netnomac/wake", json={"relay_device_id":"netnew"})
+        self.assertEqual(no_mac.status_code, 409, no_mac.text)
+        self.assertIn("MAC", no_mac.json()["detail"])
+
+        offline_relay = self.client.post("/api/v1/admin/devices/netnomac/wake", json={"relay_device_id":"netoffline"})
+        self.assertEqual(offline_relay.status_code, 409)
+
+        old_relay = self.client.post("/api/v1/admin/devices/netoffline/wake", json={"relay_device_id":"dev"})
+        self.assertEqual(old_relay.status_code, 409)
+
+        self_relay = self.client.post("/api/v1/admin/devices/netoffline/wake", json={"relay_device_id":"netoffline"})
+        self.assertEqual(self_relay.status_code, 400)
+
+        ok = self.client.post("/api/v1/admin/devices/netoffline/wake", json={"relay_device_id":"netnew"})
+        self.assertEqual(ok.status_code, 201, ok.text)
+        self.assertEqual(ok.json()["mac"], "11:22:33:44:55:66")
+        with self.Session() as db:
+            job = db.get(Job, ok.json()["id"])
+            self.assertEqual(job.type, "WAKE_ON_LAN")
+            self.assertEqual(job.device_id, "netnew")
+            self.assertEqual(job.options, {"mac":"11:22:33:44:55:66", "target_device_id":"netoffline"})

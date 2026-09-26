@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.18.0"
+var version = "0.20.0"
 
 const serviceName = "fleetview-agent"
 
@@ -358,6 +358,25 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 		output, exitCode, err = runCommand(ctx, command)
 		result.Output = output
 		result.ExitCode = &exitCode
+	case "NETWORK_DIAGNOSTIC":
+		tool, _ := job.Options["tool"].(string)
+		target, _ := job.Options["target"].(string)
+		portFloat, _ := job.Options["port"].(float64) // JSON numbers decode as float64
+		var output string
+		var exitCode int
+		output, exitCode, err = runNetworkDiagnostic(ctx, tool, target, int(portFloat))
+		result.Output = output
+		result.ExitCode = &exitCode
+	case "WAKE_ON_LAN":
+		mac, _ := job.Options["mac"].(string)
+		if strings.TrimSpace(mac) == "" {
+			err = fmt.Errorf("server job did not include a MAC address")
+			break
+		}
+		err = sendWakeOnLAN(mac)
+		if err == nil {
+			result.Output = fmt.Sprintf("Magic packet broadcast for %s", mac)
+		}
 	case "UPGRADE_AGENT":
 		downloadURL, _ := job.Options["url"].(string)
 		expectedSHA, _ := job.Options["sha256"].(string)

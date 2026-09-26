@@ -336,6 +336,69 @@ def run_command(device_id: str, payload: RunCommandInput, user=Depends(require_a
     return {"id": job.id, "device_id": device_id}
 
 
+SAFE_TARGET = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+
+
+def supports_network_diagnostic(device):
+    try:
+        return tuple(int(part) for part in (device.agent_version or "").split(".")[:2]) >= (0, 20)
+    except ValueError:
+        return False
+
+
+# Shipped in the same 0.20.0 release as network diagnostics.
+supports_wake_on_lan = supports_network_diagnostic
+
+
+class NetworkDiagnosticInput(BaseModel):
+    tool: str = Field(pattern="^(ping|traceroute|dns|port_check)$")
+    target: str = Field(min_length=1, max_length=255, pattern=SAFE_TARGET.pattern)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+
+@router.post("/api/v1/admin/devices/{device_id}/network-diagnostic", dependencies=[Depends(require_operator)], status_code=201)
+def run_network_diagnostic(device_id: str, payload: NetworkDiagnosticInput, db: Session = Depends(get_db)):
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if payload.tool == "port_check" and payload.port is None:
+        raise HTTPException(400, "port_check requires a port")
+    if not supports_network_diagnostic(device):
+        raise HTTPException(409, "Upgrade this device's existing agent to 0.20.0 first")
+    job = Job(device_id=device_id, type="NETWORK_DIAGNOSTIC",
+              options={"tool": payload.tool, "target": payload.target, "port": payload.port})
+    db.add(job)
+    db.commit()
+    return {"id": job.id, "device_id": device_id}
+
+
+class WakeOnLanInput(BaseModel):
+    relay_device_id: str = Field(min_length=1, max_length=36)
+
+
+@router.post("/api/v1/admin/devices/{device_id}/wake", dependencies=[Depends(require_operator)], status_code=201)
+def wake_device(device_id: str, payload: WakeOnLanInput, db: Session = Depends(get_db)):
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    mac_addresses = (device.inventory or {}).get("mac_addresses") or []
+    if not isinstance(mac_addresses, list) or not mac_addresses:
+        raise HTTPException(409, "This device has no known MAC address yet; it needs at least one inventory scan first")
+    relay = db.get(Device, payload.relay_device_id)
+    if not relay:
+        raise HTTPException(404, "Relay device not found")
+    if relay.id == device.id:
+        raise HTTPException(400, "The relay must be a different, currently online device")
+    if as_utc(relay.last_seen) < utcnow() - timedelta(minutes=2):
+        raise HTTPException(409, "The relay device must currently be online")
+    if not supports_wake_on_lan(relay):
+        raise HTTPException(409, "The relay device's agent must be 0.20.0 or later")
+    job = Job(device_id=relay.id, type="WAKE_ON_LAN", options={"mac": mac_addresses[0], "target_device_id": device.id})
+    db.add(job)
+    db.commit()
+    return {"id": job.id, "relay_device_id": relay.id, "mac": mac_addresses[0]}
+
+
 @router.get("/api/v1/admin/agent-version", dependencies=[Depends(require_viewer)])
 def agent_version(db: Session = Depends(get_db)):
     manifest = published_agent_manifest()

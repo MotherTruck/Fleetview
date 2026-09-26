@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>FleetView</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.19.0">
+    <link rel="stylesheet" href="/static/styles.css?v=0.20.0">
     <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
   </head>
   <body class="signed-out">
@@ -90,6 +90,19 @@
           </div>
           <div id="inventoryDevices" class="inventory-devices"></div>
         </section>
+
+        <section class="panel" id="networkTopologyPanel" hidden>
+          <div class="panel-heading">
+            <div><p class="eyebrow">NETWORK</p><h2>Devices seen on your network</h2></div>
+            <span class="panel-note">From configured OPNsense integrations' DHCP leases</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>IP</th><th>MAC</th><th>Hostname (DHCP)</th><th>Source</th><th>Status</th></tr></thead>
+              <tbody id="networkTopologyTable"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section class="page" data-page-panel="deploy">
@@ -157,6 +170,26 @@
             </label>
             <p class="form-note">Runs once on each selected device via Bash (Linux) or PowerShell (Windows) and reports back when it finishes — there is no live/interactive shell. Requires a native agent on 0.16.0 or later. Admin only.</p>
             <div class="settings-actions"><button type="submit" id="runCommandSubmit" disabled>Run on selected devices</button></div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">DIAGNOSTICS</p><h2>Network diagnostics</h2></div></div>
+          <form id="netDiagForm" class="agent-settings-form">
+            <div class="settings-grid">
+              <label>Tool
+                <select id="netDiagTool">
+                  <option value="ping">Ping</option>
+                  <option value="traceroute">Traceroute</option>
+                  <option value="dns">DNS lookup</option>
+                  <option value="port_check">Port check</option>
+                </select>
+              </label>
+              <label>Target host or IP<input id="netDiagTarget" type="text" required maxlength="255" placeholder="e.g. 192.168.1.1 or example.com"></label>
+              <label id="netDiagPortLabel" hidden>Port<input id="netDiagPort" type="number" min="1" max="65535" placeholder="e.g. 443"></label>
+            </div>
+            <p class="form-note">Runs once on each selected device and reports back when it finishes — read-only, no changes made to the device. Requires a native agent on 0.20.0 or later.</p>
+            <div class="settings-actions"><button type="submit" id="netDiagSubmit" disabled>Run on selected devices</button></div>
           </form>
         </section>
 
@@ -528,6 +561,6 @@ FLEETVIEW_PORT=8080</code></pre>
 
     <script src="/static/vendor/xterm/xterm.js" defer></script>
     <script src="/static/vendor/xterm/xterm-addon-fit.js" defer></script>
-    <script src="/static/app.js?v=0.19.0" defer></script>
+    <script src="/static/app.js?v=0.20.0" defer></script>
   </body>
 </html>

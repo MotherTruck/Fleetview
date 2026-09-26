@@ -937,9 +937,45 @@ function renderInventory() {
         <div class="device-actions"><button data-action="details" data-tab="overview" data-device-id="${escapeHtml(device.id)}">View device details</button></div>
       </article>`;
   }).join("") : '<div class="empty">No devices match this view.</div>';
+  renderNetworkTopology();
 }
 
-const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade" };
+// Cross-references OPNsense's DHCP leases (from any configured OPNsense
+// integrations) against FleetView's own managed devices by MAC address, so
+// this shows everything actually on the network -- not just what's
+// enrolled -- and makes unmanaged devices easy to spot. Purely a client-side
+// join over data already fetched for the Integrations tab; no separate
+// endpoint needed.
+function renderNetworkTopology() {
+  const panel = $("#networkTopologyPanel");
+  if (!panel) return;
+  const opnsenseIntegrations = state.integrations.filter((item) => item.kind === "opnsense");
+  panel.hidden = opnsenseIntegrations.length === 0;
+  if (!opnsenseIntegrations.length) return;
+  const managedByMac = new Map();
+  for (const device of state.devices) {
+    const macs = Array.isArray(device.inventory?.mac_addresses) ? device.inventory.mac_addresses : [];
+    for (const mac of macs) managedByMac.set(mac.toLowerCase(), device);
+  }
+  const rows = [];
+  for (const integration of opnsenseIntegrations) {
+    const leases = Array.isArray(integration.cached_data?.dhcp_leases) ? integration.cached_data.dhcp_leases : [];
+    for (const lease of leases) {
+      rows.push({ ...lease, sourceName: integration.name, managedDevice: lease.mac ? managedByMac.get(lease.mac.toLowerCase()) : null });
+    }
+  }
+  $("#networkTopologyTable").innerHTML = rows.length ? rows.map((row) => `<tr>
+    <td>${escapeHtml(row.ip || "")}</td>
+    <td><code>${escapeHtml(row.mac || "")}</code></td>
+    <td>${escapeHtml(row.hostname || "")}</td>
+    <td>${escapeHtml(row.sourceName)}</td>
+    <td>${row.managedDevice
+      ? `<button type="button" class="secondary" data-action="details" data-tab="overview" data-device-id="${escapeHtml(row.managedDevice.id)}">Managed: ${escapeHtml(row.managedDevice.display_name || row.managedDevice.hostname)}</button>`
+      : '<span class="pill severity-unknown">Unmanaged</span>'}</td>
+  </tr>`).join("") : '<tr><td colspan="5" class="empty">No DHCP leases synced yet.</td></tr>';
+}
+
+const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN" };
 
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
@@ -978,6 +1014,8 @@ function updateDeploySubmitState() {
   $("#deploySelectionCount").textContent = count === 0 ? "No devices selected." : `${count} device${count === 1 ? "" : "s"} selected.`;
   const runCommandSubmit = $("#runCommandSubmit");
   if (runCommandSubmit) runCommandSubmit.disabled = count === 0 || state.user?.role !== "admin";
+  const netDiagSubmit = $("#netDiagSubmit");
+  if (netDiagSubmit) netDiagSubmit.disabled = count === 0 || state.user?.role === "viewer";
 }
 
 function renderDeployJobs() {
@@ -1431,6 +1469,20 @@ function renderMonitoring(device) {
 function renderOverview(device) {
   const inventory = device.inventory || {};
   const addresses = Array.isArray(inventory.ip_addresses) ? inventory.ip_addresses.join(", ") : "Unknown";
+  const macAddresses = Array.isArray(inventory.mac_addresses) ? inventory.mac_addresses : [];
+  const canWake = macAddresses.length > 0 && !device.online && state.user?.role !== "viewer";
+  const relayOptions = state.devices.filter((item) => item.id !== device.id && item.online);
+  const wakeSection = canWake ? `
+    <section class="wake-on-lan"><p class="eyebrow">POWER</p>
+      <dl><div><dt>MAC address${macAddresses.length > 1 ? "es" : ""}</dt><dd>${escapeHtml(macAddresses.join(", "))}</dd></div></dl>
+      ${relayOptions.length ? `
+        <div class="device-actions">
+          <label>Wake via <select id="wakeRelayDevice">${relayOptions.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.display_name || item.hostname)}</option>`).join("")}</select></label>
+          <button type="button" id="wakeDeviceButton" data-device-id="${escapeHtml(device.id)}">Wake on LAN</button>
+        </div>
+        <p class="form-note">Sends a magic packet from the selected online device -- it must be on the same LAN as this one, since broadcast packets don't cross routers.</p>
+      ` : '<p class="form-note">No other device is currently online to relay a wake packet from.</p>'}
+    </section>` : "";
   $("#detailOverview").innerHTML = `
     <section><p class="eyebrow">SYSTEM</p><dl>
       <div><dt>Hostname</dt><dd>${escapeHtml(device.hostname)}</dd></div>
@@ -1456,7 +1508,8 @@ function renderOverview(device) {
       <div><dt>Last inventory scan</dt><dd>${escapeHtml(fullDate(device.last_scan_at))}</dd></div>
       <div><dt>Last vulnerability scan</dt><dd>${escapeHtml(fullDate(device.last_vulnerability_scan_at))}</dd></div>
       <div><dt>Last successful patch</dt><dd>${escapeHtml(fullDate(device.last_patched_at))}</dd></div>
-    </dl></section>`;
+    </dl></section>
+    ${wakeSection}`;
 }
 
 function renderDeviceDetails() {
@@ -1758,6 +1811,7 @@ $("#appTabs").addEventListener("click", (event) => {
 });
 $("#patchDevices").addEventListener("click", handleDeviceAction);
 $("#inventoryDevices").addEventListener("click", handleDeviceAction);
+$("#networkTopologyTable").addEventListener("click", handleDeviceAction);
 $("#detailTableBody").addEventListener("click", async event => {
   const dockerButton = event.target.closest("[data-docker-action]");
   if (dockerButton) {
@@ -1882,6 +1936,30 @@ $("#runCommandForm").addEventListener("submit", async (event) => {
     const failed = outcomes.filter(result => result.status === "rejected");
     showNotice(`Queued on ${deviceIds.length - failed.length} device(s).${failed.length ? ` ${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
     $("#runCommandText").value = "";
+    setPage("patching");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { updateDeploySubmitState(); }
+});
+$("#netDiagTool").addEventListener("change", () => {
+  $("#netDiagPortLabel").hidden = $("#netDiagTool").value !== "port_check";
+});
+$("#netDiagForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const tool = $("#netDiagTool").value;
+  const target = $("#netDiagTarget").value.trim();
+  const port = $("#netDiagPort").value ? Number($("#netDiagPort").value) : null;
+  const deviceIds = [...state.deploySelected];
+  if (!target || deviceIds.length === 0) return;
+  if (tool === "port_check" && !port) { showNotice("Port check requires a port.", true); return; }
+  const button = $("#netDiagSubmit");
+  button.disabled = true;
+  try {
+    const outcomes = await Promise.allSettled(deviceIds.map(id => api(`/api/v1/admin/devices/${id}/network-diagnostic`, {
+      method: "POST", body: JSON.stringify({ tool, target, port }),
+    })));
+    const failed = outcomes.filter(result => result.status === "rejected");
+    showNotice(`Queued on ${deviceIds.length - failed.length} device(s).${failed.length ? ` ${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
     setPage("patching");
     await refresh();
   } catch (error) { showNotice(error.message, true); }
@@ -2100,6 +2178,21 @@ $("#deviceDialog").addEventListener("click", async (event) => {
     disconnectDeviceMetrics();
   }
   if (state.detailTab !== "terminal") disconnectTerminal();
+});
+$("#deviceDialog").addEventListener("click", async (event) => {
+  const button = event.target.closest("#wakeDeviceButton");
+  if (!button) return;
+  const relayId = $("#wakeRelayDevice")?.value;
+  const device = state.devices.find((item) => item.id === button.dataset.deviceId);
+  if (!relayId || !device) return;
+  const relay = state.devices.find((item) => item.id === relayId);
+  if (!confirm(`Send a Wake-on-LAN packet for ${device.display_name || device.hostname}, relayed via ${relay?.display_name || relay?.hostname || relayId}?`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/wake`, { method: "POST", body: JSON.stringify({ relay_device_id: relayId }) });
+    showNotice(`Wake-on-LAN packet sent for ${device.display_name || device.hostname}.`);
+  } catch (error) { showNotice(error.message, true); }
+  finally { button.disabled = false; }
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
 $("#themeSwatches").addEventListener("click", (event) => {

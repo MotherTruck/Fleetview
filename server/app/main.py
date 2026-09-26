@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="FleetView", version="0.19.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="FleetView", version="0.20.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(deployment_router)
 app.include_router(integrations_router)

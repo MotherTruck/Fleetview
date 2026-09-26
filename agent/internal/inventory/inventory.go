@@ -32,6 +32,26 @@ func ipAddresses() []string {
 	return result
 }
 
+// macAddresses reports every non-loopback interface's hardware address, so
+// the server can offer Wake-on-LAN for this device without a separate
+// discovery step. net.Interfaces() is already cross-platform, unlike most
+// of this package's other collectors, so no Linux/Windows split is needed
+// here.
+func macAddresses() []string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return []string{}
+	}
+	result := []string{}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 || len(iface.HardwareAddr) == 0 {
+			continue
+		}
+		result = append(result, iface.HardwareAddr.String())
+	}
+	return result
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {

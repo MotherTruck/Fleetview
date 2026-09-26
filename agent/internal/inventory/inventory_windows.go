@@ -57,6 +57,7 @@ func Collect(dockerInventoryEnabled bool) (System, error) {
 		"root_disk_available_bytes": diskAvailable,
 		"root_disk_used_bytes":      subtractFloor(diskTotal, diskAvailable),
 		"ip_addresses":              ipAddresses(),
+		"mac_addresses":             macAddresses(),
 		"uptime_seconds":            uint64(windows.DurationSinceBoot().Seconds()),
 	}
 	if dockerInventoryEnabled {
