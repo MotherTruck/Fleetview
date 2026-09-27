@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="FleetView", version="0.21.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="FleetView", version="0.22.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(deployment_router)
 app.include_router(integrations_router)
@@ -471,10 +471,11 @@ def report_metrics(
 ) -> Response:
     device = authenticate_agent(db, x_device_id, authorization)
     values = payload.model_dump(mode="json")
-    # MetricSample has no gpus column (no GPU history table yet; the current
-    # GPU state is preserved below via device.inventory["_monitoring"]), so
-    # passing it through as a constructor kwarg raises a TypeError.
-    sample = MetricSample(device_id=device.id, **payload.model_dump(exclude={"gpus"}))
+    # MetricSample has no gpus or top_consumers columns (no history table for
+    # either; the current values are preserved below via
+    # device.inventory["_monitoring"] instead), so passing them through as
+    # constructor kwargs raises a TypeError.
+    sample = MetricSample(device_id=device.id, **payload.model_dump(exclude={"gpus", "top_consumers"}))
     db.add(sample)
 
     inventory = dict(device.inventory or {})

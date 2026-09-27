@@ -32,6 +32,7 @@ const state = {
   liveMetricsByDevice: new Map(),
   terminalSocket: null,
   terminalDeviceId: null,
+  topConsumersSort: "cpu_percent",
 };
 
 const ACCENT_PRESETS = [
@@ -1450,6 +1451,35 @@ function renderMonitoring(device) {
     return `<article><div class="gpu-title"><div><small>${escapeHtml(gpu.vendor)}</small><strong>${escapeHtml(gpu.name)}</strong></div><span>GPU ${escapeHtml(gpu.index)}</span></div><dl><div><dt>Utilization</dt><dd>${formatPercent(gpu.utilization_percent)}</dd></div><div><dt>VRAM</dt><dd>${gpu.memory_total_bytes ? formatUsage(gpu.memory_used_bytes, gpu.memory_total_bytes) : "Not reported"}</dd></div><div><dt>Temperature</dt><dd>${escapeHtml(temperatureValue)}</dd></div><div><dt>Power</dt><dd>${escapeHtml(powerValue)}</dd></div></dl>${usageBar(gpu.utilization_percent)}${gpuMemory === null ? "" : usageBar(gpuMemory, "blue")}</article>`;
   }).join("")}</div></section>` : '<section class="gpu-section empty-gpu"><p>No supported GPU telemetry was detected on this device.</p></section>';
 
+  const consumers = Array.isArray(metrics.top_consumers) ? [...metrics.top_consumers] : [];
+  const sortKey = state.topConsumersSort;
+  consumers.sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
+  const consumerRows = consumers.length ? consumers.map((item) => `
+    <tr>
+      <td><span class="pill ${item.kind === "container" ? "succeeded" : "unknown"}">${escapeHtml(item.kind)}</span></td>
+      <td class="package-name">${escapeHtml(item.name || "Unknown")}</td>
+      <td>${item.kind === "process" && item.pid ? escapeHtml(item.pid) : "—"}</td>
+      <td>${formatPercent(item.cpu_percent)}</td>
+      <td>${formatBytes(item.memory_bytes)}</td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">No process/container data reported yet -- requires agent 0.22.0 or later.</td></tr>';
+  const topConsumersSection = `
+    <section class="top-consumers-section">
+      <div class="monitoring-heading">
+        <div><p class="eyebrow">LIVE SNAPSHOT</p><h3>Top resource consumers</h3></div>
+        <div class="consumer-sort-toggle">
+          <button type="button" class="secondary ${sortKey === "cpu_percent" ? "active" : ""}" data-consumer-sort="cpu_percent">Sort by CPU</button>
+          <button type="button" class="secondary ${sortKey === "memory_bytes" ? "active" : ""}" data-consumer-sort="memory_bytes">Sort by memory</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Kind</th><th>Name</th><th>PID</th><th>CPU</th><th>Memory</th></tr></thead>
+          <tbody>${consumerRows}</tbody>
+        </table>
+      </div>
+      <p class="form-note">Host processes and running Docker containers merged into one list: the top entries by CPU and by memory (deduplicated), not a single blended score.</p>
+    </section>`;
+
   container.innerHTML = `
     <p class="live-status-line">${liveBadge}</p>
     <div class="current-metrics">
@@ -1461,6 +1491,7 @@ function renderMonitoring(device) {
       <div><small>Network now</small><strong>↓ ${formatRate(metrics.network_receive_bps)}</strong><span>↑ ${formatRate(metrics.network_transmit_bps)}</span></div>
     </div>
     ${gpuCards}
+    ${topConsumersSection}
     <div class="chart-grid-wrap">
       ${lineChart("CPU usage", formatPercent(metrics.cpu_percent), samples, (sample) => sample.cpu_percent, 100)}
       ${lineChart("Memory usage", formatPercent(memory), samples, memoryValue, 100, "chart-blue")}
@@ -2205,6 +2236,12 @@ $("#deviceDialog").addEventListener("click", async (event) => {
   finally { button.disabled = false; }
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
+$("#monitoringContent").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-consumer-sort]");
+  if (!button) return;
+  state.topConsumersSort = button.dataset.consumerSort;
+  if (state.detailDevice) renderMonitoring(state.detailDevice);
+});
 $("#themeSwatches").addEventListener("click", (event) => {
   const button = event.target.closest("[data-accent]");
   if (!button) return;

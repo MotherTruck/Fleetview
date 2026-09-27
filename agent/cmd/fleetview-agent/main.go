@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.21.0"
+var version = "0.22.0"
 
 const serviceName = "fleetview-agent"
 
@@ -135,9 +135,11 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 	// interactive terminal) runs alongside the poll loop below, not instead
 	// of it: a device with no live connection is still fully manageable
 	// through queued jobs exactly as before this existed.
-	var gpuLiveEnabled atomic.Bool
+	var gpuLiveEnabled, dockerLiveEnabled atomic.Bool
 	gpuLiveEnabled.Store(settings.GPUMonitoringEnabled)
-	go live.Run(ctx, api, metricsCollector, &gpuLiveEnabled, logger)
+	dockerLiveEnabled.Store(settings.DockerInventoryEnabled)
+	processSampler := telemetry.NewProcessSampler()
+	go live.Run(ctx, api, metricsCollector, processSampler, &gpuLiveEnabled, &dockerLiveEnabled, logger)
 
 	scanTicker := time.NewTicker(time.Duration(settings.InventoryIntervalSeconds) * time.Second)
 	jobTicker := time.NewTicker(cfg.JobPollInterval)
@@ -190,6 +192,7 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 				scanTicker.Reset(time.Duration(remoteSettings.InventoryIntervalSeconds) * time.Second)
 			}
 			gpuLiveEnabled.Store(remoteSettings.GPUMonitoringEnabled)
+			dockerLiveEnabled.Store(remoteSettings.DockerInventoryEnabled)
 			settings = remoteSettings
 		}
 	}

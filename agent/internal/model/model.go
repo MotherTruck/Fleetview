@@ -73,6 +73,17 @@ type ListeningPort struct {
 	Process  string `json:"process"`
 }
 
+// ResourceConsumer is one entry in a MetricsReport's top-consumers list: a
+// single host process or Docker container, whichever kind it is. PID is
+// only meaningful for Kind == "process".
+type ResourceConsumer struct {
+	Kind        string  `json:"kind"`
+	PID         int     `json:"pid,omitempty"`
+	Name        string  `json:"name"`
+	CPUPercent  float64 `json:"cpu_percent"`
+	MemoryBytes uint64  `json:"memory_bytes"`
+}
+
 type MetricsReport struct {
 	RecordedAt           time.Time `json:"recorded_at"`
 	CPUPercent           float64   `json:"cpu_percent"`
@@ -93,6 +104,7 @@ type MetricsReport struct {
 	TemperatureCelsius   *float64  `json:"temperature_celsius,omitempty"`
 	UptimeSeconds        uint64    `json:"uptime_seconds"`
 	GPUs                 []GPU     `json:"gpus"`
+	TopConsumers         []ResourceConsumer `json:"top_consumers"`
 }
 
 type GPU struct {

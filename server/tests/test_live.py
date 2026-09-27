@@ -116,12 +116,18 @@ class LiveWebSocketTests(unittest.TestCase):
                         "disk_used_bytes": 0, "disk_total_bytes": 0, "load_1": 0, "load_5": 0, "load_15": 0,
                         "network_receive_bps": 0, "network_transmit_bps": 0, "network_receive_bytes": 0,
                         "network_transmit_bytes": 0, "process_count": 1, "uptime_seconds": 1,
+                        "top_consumers": [
+                            {"kind": "process", "pid": 123, "name": "stress", "cpu_percent": 97.5, "memory_bytes": 1048576},
+                            {"kind": "container", "name": "fv-stress-test", "cpu_percent": 100.4, "memory_bytes": 1052672},
+                        ],
                     }
                     agent_ws.send_json(sample)
                     relayed = metrics_ws.receive_json()
                     self.assertEqual(relayed["type"], "metrics")
                     self.assertEqual(relayed["device_id"], "live-new")
                     self.assertEqual(relayed["cpu_percent"], 42.5)
+                    self.assertEqual(relayed["top_consumers"][0]["name"], "stress")
+                    self.assertEqual(relayed["top_consumers"][1]["kind"], "container")
 
             # Agent socket now closed (the `with` block above exited).
             self.assertEqual(status_ws.receive_json(), {"type": "status", "device_id": "live-new", "live": False})

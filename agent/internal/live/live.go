@@ -25,9 +25,15 @@ import (
 	"nhooyr.io/websocket"
 
 	"fleetview-agent/internal/client"
+	"fleetview-agent/internal/containers"
 	"fleetview-agent/internal/model"
 	"fleetview-agent/internal/telemetry"
 )
+
+// topConsumersLimit bounds the merged process+container list sent with each
+// metrics tick (see telemetry.TopConsumers): up to this many by CPU and up
+// to this many by memory, deduplicated.
+const topConsumersLimit = 12
 
 const (
 	metricsInterval  = 2 * time.Second
@@ -61,7 +67,7 @@ type inboundMessage struct {
 
 // Run dials the server's live endpoint and keeps it connected until ctx is
 // cancelled, reconnecting with capped exponential backoff on any failure.
-func Run(ctx context.Context, api *client.Client, collector *telemetry.Collector, gpuEnabled *atomic.Bool, logger *log.Logger) {
+func Run(ctx context.Context, api *client.Client, collector *telemetry.Collector, processes *telemetry.ProcessSampler, gpuEnabled, dockerEnabled *atomic.Bool, logger *log.Logger) {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 	for {
@@ -69,7 +75,7 @@ func Run(ctx context.Context, api *client.Client, collector *telemetry.Collector
 			return
 		}
 		startedAt := time.Now()
-		err := runOnce(ctx, api, collector, gpuEnabled, logger)
+		err := runOnce(ctx, api, collector, processes, gpuEnabled, dockerEnabled, logger)
 		if ctx.Err() != nil {
 			return
 		}
@@ -91,6 +97,23 @@ func Run(ctx context.Context, api *client.Client, collector *telemetry.Collector
 	}
 }
 
+// gatherConsumers combines this tick's host-process sample with a Docker
+// container stats snapshot (when Docker inventory is enabled). Container
+// stats fetching is bounded to a few seconds so a hung Docker daemon can
+// never stall the metrics ticker beyond that.
+func gatherConsumers(ctx context.Context, processes *telemetry.ProcessSampler, dockerEnabled bool) []model.ResourceConsumer {
+	all := processes.Sample()
+	if !dockerEnabled {
+		return all
+	}
+	statsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if list, err := containers.CollectStats(statsCtx); err == nil {
+		all = append(all, list...)
+	}
+	return all
+}
+
 func webSocketURL(baseURL string) (string, error) {
 	switch {
 	case strings.HasPrefix(baseURL, "https://"):
@@ -102,7 +125,7 @@ func webSocketURL(baseURL string) (string, error) {
 	}
 }
 
-func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Collector, gpuEnabled *atomic.Bool, logger *log.Logger) error {
+func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Collector, processes *telemetry.ProcessSampler, gpuEnabled, dockerEnabled *atomic.Bool, logger *log.Logger) error {
 	wsURL, err := webSocketURL(api.BaseURL())
 	if err != nil {
 		return err
@@ -171,6 +194,7 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 				if err != nil {
 					continue
 				}
+				report.TopConsumers = telemetry.TopConsumers(gatherConsumers(sessionCtx, processes, dockerEnabled.Load()), topConsumersLimit)
 				send(liveMetricsMessage{Type: "metrics", MetricsReport: report})
 			}
 		}

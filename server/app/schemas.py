@@ -62,6 +62,14 @@ class VulnerabilityReport(BaseModel):
     listening_ports: list[ListeningPort] = Field(default_factory=list, max_length=2000)
 
 
+class ResourceConsumer(BaseModel):
+    kind: str = Field(default="process", max_length=20)
+    pid: int = Field(default=0, ge=0)
+    name: str = Field(default="", max_length=255)
+    cpu_percent: float = Field(default=0, ge=0)
+    memory_bytes: int = Field(default=0, ge=0)
+
+
 class MetricsReport(BaseModel):
     recorded_at: datetime
     cpu_percent: float = Field(ge=0, le=100)
@@ -82,6 +90,7 @@ class MetricsReport(BaseModel):
     temperature_celsius: float | None = Field(default=None, ge=-100, le=250)
     uptime_seconds: int = Field(ge=0)
     gpus: list[dict[str, Any]] = Field(default_factory=list, max_length=16)
+    top_consumers: list[ResourceConsumer] = Field(default_factory=list, max_length=64)
 
 
 class PackageUpsert(BaseModel):

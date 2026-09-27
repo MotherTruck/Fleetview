@@ -6,6 +6,10 @@ This repository is the project's home going forward, starting from a snapshot of
 
 The endpoint adapters support Arch Linux/CachyOS through pacman, Debian/Ubuntu through APT, and Windows through winget/Windows Update. The pacman scan path uses `checkupdates`, avoiding the unsupported partial-upgrade state caused by `pacman -Sy`.
 
+## Included in version 0.22.0
+
+- **Top resource consumers**: agents 0.22.0+ report which host processes and Docker containers are using the most CPU and memory, merged into one list on the Monitoring tab's live snapshot -- sortable by either metric, since a CPU-bound and a memory-bound workload are usually different processes. Host process sampling reads `/proc` on Linux and uses `CreateToolhelp32Snapshot`/`GetProcessTimes` on Windows (no new dependency, matching this agent's existing flat-syscall approach); container figures come from Docker's own non-streaming stats endpoint. Rides the same 2-second live metrics channel already used for the rest of the Monitoring tab -- nothing new to configure.
+
 ## Included in version 0.21.0
 
 - **Vulnerability exposure scoring**: agents 0.21.0+ (Arch/CachyOS and Debian/Ubuntu, the same platforms vulnerability scanning already supports) collect which processes are actually listening on the network alongside every vulnerability scan. The Vulnerabilities tab gains an **Exposure** column tagging each finding **Listening** (a process name plausibly matching the vulnerable package is bound to a network port -- shown with the exact port) or **Unknown** -- a transparent name-matching heuristic, not active exploit verification, so a vulnerable library with no listening process is correctly left unscored rather than guessed at. See [`docs/NETWORKING.md`](docs/NETWORKING.md#exposure-scoring) for how the heuristic works and its limits.

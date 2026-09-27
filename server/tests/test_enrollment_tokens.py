@@ -235,10 +235,11 @@ class EnrollmentFlowTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 404)
 
     def test_report_metrics_with_gpus_does_not_500(self):
-        # Regression test: MetricSample has no gpus column (GPU history isn't
-        # implemented; only current GPU state is kept, in device.inventory),
-        # so constructing it with **payload.model_dump() unfiltered raised
-        # TypeError: 'gpus' is an invalid keyword argument for MetricSample.
+        # Regression test: MetricSample has no gpus or top_consumers columns
+        # (neither has a history table; only the current value is kept, in
+        # device.inventory), so constructing it with **payload.model_dump()
+        # unfiltered raised TypeError: 'gpus' is an invalid keyword argument
+        # for MetricSample.
         created = self.create_token(label="metrics-device")
         enrolled = self.enroll(created["token"], hostname="metrics-host")
         payload = self.MetricsReport(
@@ -260,6 +261,10 @@ class EnrollmentFlowTests(unittest.TestCase):
             process_count=42,
             uptime_seconds=3600,
             gpus=[{"index": "0", "name": "Test GPU", "vendor": "NVIDIA"}],
+            top_consumers=[
+                {"kind": "process", "pid": 999, "name": "stress", "cpu_percent": 88.0, "memory_bytes": 123456},
+                {"kind": "container", "name": "busy-box", "cpu_percent": 12.0, "memory_bytes": 654321},
+            ],
         )
         with self.SessionLocal() as db:
             response = self.main.report_metrics(
@@ -275,6 +280,11 @@ class EnrollmentFlowTests(unittest.TestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0].cpu_percent, 12.5)
         self.assertEqual(samples[0].process_count, 42)
+
+        with self.SessionLocal() as db:
+            device = self.main.get_device(enrolled.device_id, db)
+        self.assertEqual(device["metrics"]["top_consumers"][0]["name"], "stress")
+        self.assertEqual(device["metrics"]["top_consumers"][1]["kind"], "container")
 
     def test_list_and_get_device_do_not_500_on_sqlite(self):
         # Regression test: device_view() compared device.last_seen (naive,
