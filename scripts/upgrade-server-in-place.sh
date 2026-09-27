@@ -3,7 +3,7 @@
 # .env, database volume, and native agent service/credentials untouched.
 set -euo pipefail
 umask 077
-project_dir="${1:-/containers/epc-replacement}"
+project_dir="${1:-/containers/fleetview}"
 release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 test -f .env || { echo "Existing .env not found; refusing a new installation." >&2; exit 1; }
@@ -14,7 +14,7 @@ test -f "$release_root/server/app/accounts.py"
 if [[ "$(pwd -P)" == "$release_root" ]]; then
   echo "Extract the release into a separate directory before running this script." >&2; exit 1
 fi
-backup_dir="$HOME/epc-server-backup-$(date +%Y%m%d-%H%M%S)"
+backup_dir="$HOME/fleetview-server-backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -m700 "$backup_dir"
 sudo docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$backup_dir/database.sql"
 test -s "$backup_dir/database.sql"

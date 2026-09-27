@@ -4,15 +4,11 @@ This is a **fresh install on a new machine**, not an upgrade — it does not
 touch any existing deployment. It targets Debian 12 (bookworm) or newer.
 Everything server-side runs in Docker, so the only genuinely Debian-specific
 step is installing Docker itself; steps 3 onward are the same commands as
-the CachyOS walkthrough in the main [README](../README.md#install-on-the-cachyos-test-machine).
-
-If you're moving an *existing* CachyOS deployment's data to this new machine
-instead of starting clean, use [`docs/VM-MIGRATION.md`](VM-MIGRATION.md)
-instead of this guide.
+the CachyOS walkthrough in the main [README](../README.md#building-from-source-instead).
 
 If you just want to *run* the server rather than build or develop it here,
-skip straight to [**Deploy the server from a published
-image**](../README.md#deploy-the-server-from-a-published-image-no-source-checkout)
+skip straight to [**Quick start: deploy the server from a published
+image**](../README.md#quick-start-deploy-the-server-from-a-published-image)
 in the main README instead — it only needs Docker itself, no git/Go/source
 checkout at all, and covers exactly step 1's Docker install plus steps 3-5
 below in one shorter path. The rest of this guide is for building the image
@@ -60,11 +56,10 @@ git clone <this repository's URL> /opt/fleetview
 cd /opt/fleetview
 ```
 
-Check out whichever branch or tag you consider the release to run — for
-example the branch this guide shipped from,
-`claude/epc-replacement-continue-v8o0cx`, if that's what you're deploying.
-If the repository is private, use the clone URL/credentials you'd normally
-use for it (SSH, or an HTTPS URL with a personal access token).
+Check out whichever branch or tag you consider the release to run (`main`
+for the latest). If the repository is private, use the clone URL/credentials
+you'd normally use for it (SSH, or an HTTPS URL with a personal access
+token).
 
 ## 3. Configure the server
 
@@ -137,7 +132,7 @@ Open **Agent → Add a new device** in the dashboard, pick the endpoint's
 platform, confirm the management URL is one that endpoint can actually
 reach, and click **Generate enrollment command**. Arch/CachyOS, Debian, and
 Ubuntu endpoints get a one-line remote installer; Windows gets a PowerShell
-command. See **Windows** and **Add another Linux device** in the main
+command. See **Windows** and **Adding a Linux device** in the main
 README for the platform-specific details.
 
 If you also want to enroll this Debian server itself as a monitored
@@ -157,6 +152,6 @@ scheduling, the custom installer upload, Docker container controls, Admin
 settings — works identically regardless of host distro; see the main
 [README](../README.md) for all of it. For upgrading this install to a later
 FleetView release once one ships, use `scripts/upgrade-server-in-place.sh`
-exactly as documented under **Upgrade an existing installation** in the
-README — that script and the in-place agent upgrade scripts are themselves
-plain bash/PowerShell and don't care which distro the server runs on either.
+exactly as documented under **Operations** in the README — that script and
+the in-place agent upgrade scripts are themselves plain bash/PowerShell and
+don't care which distro the server runs on either.

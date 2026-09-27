@@ -23,33 +23,9 @@ else
   exit 1
 fi
 
-new_enrolled=false
-if sudo test -f /etc/fleetview-agent/agent.env && sudo test -f /var/lib/fleetview-agent/state.json; then
-  new_enrolled=true
-fi
-old_enrolled=false
-if sudo test -f /etc/epc-agent/agent.env && sudo test -f /var/lib/epc-agent/state.json; then
-  old_enrolled=true
-fi
-
-if [[ "$new_enrolled" != true && "$old_enrolled" != true ]]; then
+if ! sudo test -f /etc/fleetview-agent/agent.env || ! sudo test -f /var/lib/fleetview-agent/state.json; then
   echo "The agent is not enrolled. Use scripts/install-agent.sh instead." >&2
   exit 1
-fi
-
-if [[ "$new_enrolled" != true && "$old_enrolled" == true ]]; then
-  echo "Migrating an install from before the FleetView rename (epc-agent -> fleetview-agent)."
-  sudo systemctl disable --now epc-agent 2>/dev/null || true
-  sudo install -d -m700 /etc/fleetview-agent /var/lib/fleetview-agent
-  # agent.env keeps its EPC_ variable names; the agent still reads those as a
-  # legacy fallback, so the file is moved as-is rather than rewritten.
-  sudo cp -a /etc/epc-agent/agent.env /etc/fleetview-agent/agent.env
-  sudo cp -a /var/lib/epc-agent/state.json /var/lib/fleetview-agent/state.json
-  sudo rm -f /etc/systemd/system/epc-agent.service /usr/local/bin/epc-agent /usr/local/sbin/epc-agent-uninstall
-  sudo rm -f /etc/epc-agent/agent.env /var/lib/epc-agent/state.json
-  sudo rmdir /etc/epc-agent /var/lib/epc-agent 2>/dev/null || true
-  sudo install -Dm644 "$project_root/agent/packaging/fleetview-agent.service" /etc/systemd/system/fleetview-agent.service
-  sudo systemctl daemon-reload
 fi
 
 # Files removed from newer releases remain after an archive is extracted over

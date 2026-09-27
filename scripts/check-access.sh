@@ -14,12 +14,8 @@ env_value() {
   grep -E "^$1=" .env | tail -n1 | cut -d= -f2- | tr -d "\"'"
 }
 
-# FLEETVIEW_BIND_ADDRESS/FLEETVIEW_PORT are current; EPC_BIND_ADDRESS/EPC_PORT
-# are read as a fallback for a .env left over from before the rename.
 bind_address="$(env_value FLEETVIEW_BIND_ADDRESS)"
-bind_address="${bind_address:-$(env_value EPC_BIND_ADDRESS)}"
 port="$(env_value FLEETVIEW_PORT)"
-port="${port:-$(env_value EPC_PORT)}"
 bind_address="${bind_address:-127.0.0.1}"
 port="${port:-8080}"
 

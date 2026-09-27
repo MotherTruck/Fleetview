@@ -3,9 +3,7 @@
 set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v go >/dev/null || { echo "Go is required on this endpoint." >&2; exit 1; }
-if sudo test -f /etc/epc-agent/agent.env && sudo test -f /var/lib/epc-agent/state.json; then
-  service=epc-agent
-elif sudo test -f /etc/fleetview-agent/agent.env && sudo test -f /var/lib/fleetview-agent/state.json; then
+if sudo test -f /etc/fleetview-agent/agent.env && sudo test -f /var/lib/fleetview-agent/state.json; then
   service=fleetview-agent
 else
   echo "No existing enrolled agent configuration and state found; refusing to install a new one." >&2
