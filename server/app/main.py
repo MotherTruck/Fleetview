@@ -205,8 +205,8 @@ def get_fleet_settings(db: Session) -> FleetSettings:
     return settings
 
 
-def job_view(job: Job) -> dict:
-    return {
+def job_view(job: Job, redact: bool = False) -> dict:
+    view = {
         "id": job.id,
         "device_id": job.device_id,
         "type": job.type,
@@ -219,6 +219,14 @@ def job_view(job: Job) -> dict:
         "output": job.output,
         "error": job.error,
     }
+    # RUN_COMMAND's options/output are effectively a secrets vault (whatever
+    # an admin typed or the command printed) -- viewers can see that a
+    # command ran, not what it was or what it printed.
+    if redact and job.type == "RUN_COMMAND":
+        view["options"] = {}
+        view["output"] = None
+        view["error"] = None
+    return view
 
 
 @app.get("/", include_in_schema=False)
@@ -824,11 +832,12 @@ def compliance_history(days: int = Query(default=30, ge=1, le=3660),
 
 
 @app.get("/api/v1/admin/jobs", dependencies=[Depends(require_viewer)])
-def list_jobs(device_id: str | None = None, db: Session = Depends(get_db)) -> list[dict]:
+def list_jobs(device_id: str | None = None, user=Depends(require_viewer), db: Session = Depends(get_db)) -> list[dict]:
     query = select(Job).order_by(Job.created_at.desc()).limit(100)
     if device_id:
         query = query.where(Job.device_id == device_id)
-    return [job_view(job) for job in db.scalars(query).all()]
+    redact = user is not None and user.role == "viewer"
+    return [job_view(job, redact=redact) for job in db.scalars(query).all()]
 
 
 @app.post("/api/v1/admin/devices/{device_id}/jobs", dependencies=[Depends(require_operator)], status_code=201)

@@ -93,6 +93,21 @@ class LiveWebSocketTests(unittest.TestCase):
         ) as ws:
             self.assertEqual(ws.receive_json()["code"], 4403)
 
+    def test_must_change_password_blocks_status_and_metrics_sockets(self):
+        # "vwr" (from setUp) has never signed in, so it still carries the
+        # forced must_change_password flag every freshly-created account
+        # gets -- exactly the state a temporary-password account is in
+        # before its first login. It must not be able to stream fleet
+        # presence or a device's live metrics until that's cleared.
+        viewer = self.viewer_client()
+        with viewer.websocket_connect("/api/v1/admin/live-status", headers={"origin": ORIGIN}) as ws:
+            self.assertEqual(ws.receive_json()["code"], 4403)
+        with viewer.websocket_connect(
+            "/api/v1/admin/devices/live-new/metrics-live", headers={"origin": ORIGIN}
+        ) as ws:
+            self.assertEqual(ws.receive_json()["code"], 4403)
+        viewer.close()
+
     def test_metrics_relay_and_live_status_broadcast(self):
         admin = TestClient(app, cookies=self.admin_cookies)
         with admin.websocket_connect("/api/v1/admin/live-status", headers={"origin": ORIGIN}) as status_ws:

@@ -261,6 +261,9 @@ async def browser_live_status(websocket: WebSocket) -> None:
     if user is None:
         await _reject(websocket, 4401, "Sign in to continue")
         return
+    if user.must_change_password:
+        await _reject(websocket, 4403, "Change your password before continuing")
+        return
     await websocket.accept()
     hub.add_status_viewer(websocket)
     try:
@@ -281,6 +284,9 @@ async def browser_metrics_live(websocket: WebSocket, device_id: str) -> None:
     user = _authenticate_session_user(websocket.cookies.get(SESSION_COOKIE, ""))
     if user is None:
         await _reject(websocket, 4401, "Sign in to continue")
+        return
+    if user.must_change_password:
+        await _reject(websocket, 4403, "Change your password before continuing")
         return
     device = _lookup_device(device_id)
     if device is None:

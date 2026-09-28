@@ -94,7 +94,7 @@ func (APT) Install(parent context.Context, packageName string) (string, int, err
 	if updateErr != nil {
 		return truncate(string(updateOutput), 1_048_576), exitCode(updateErr), updateErr
 	}
-	command := exec.CommandContext(ctx, "apt-get", "-y", "install", packageName)
+	command := exec.CommandContext(ctx, "apt-get", "-y", "install", "--", packageName)
 	command.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	installOutput, err := command.CombinedOutput()
 	output := append(updateOutput, installOutput...)

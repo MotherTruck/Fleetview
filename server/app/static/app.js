@@ -2034,7 +2034,7 @@ $("#customPackageRows").addEventListener("click", async event => {
   if (!confirm(`Run custom installer "${pkg.name}" on ${targets.length} device(s)?\n\nFiles: ${pkg.files.map(file => file.filename).join(", ")}\nCommand: ${pkg.command}\n\nThe agent runs this command with its service privileges.`)) return;
   button.disabled = true;
   try {
-    const outcomes = await Promise.allSettled(targets.map(device => api(`/api/v1/admin/custom-packages/${pkg.id}/devices/${device.id}/deploy`, { method: "POST" })));
+    const outcomes = await Promise.allSettled(targets.map(device => api(`/api/v1/admin/custom-packages/${pkg.id}/devices/${device.id}/deploy`, { method: "POST", body: JSON.stringify({ confirmed: true }) })));
     const failed = outcomes.filter(result => result.status === "rejected");
     showNotice(`Queued ${targets.length - failed.length} install(s). ${failed.length ? `${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
     await refresh();

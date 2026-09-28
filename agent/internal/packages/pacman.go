@@ -63,7 +63,7 @@ func (Pacman) InstallUpdates() (string, int, error) {
 func (Pacman) Install(parent context.Context, packageName string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "pacman", "-Sy", "--noconfirm", "--needed", packageName).CombinedOutput()
+	output, err := exec.CommandContext(ctx, "pacman", "-Sy", "--noconfirm", "--needed", "--", packageName).CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		err = fmt.Errorf("install timed out after 30 minutes")
 	}

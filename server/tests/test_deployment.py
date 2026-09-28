@@ -122,7 +122,11 @@ class DeploymentTests(unittest.TestCase):
             files=[("files", ("../install.sh", b"hello", "application/octet-stream"))])
         self.assertEqual(bad_name.status_code, 400)
         path = f"/api/v1/admin/custom-packages/{bundle['id']}/devices/dev/deploy"
-        deploy = self.client.post(path)
+        unconfirmed = self.client.post(path, json={"confirmed": False})
+        self.assertEqual(unconfirmed.status_code, 400)
+        with self.Session() as db:
+            self.assertEqual(len(db.scalars(select(Job)).all()), 0, "an unconfirmed deploy must not queue a job")
+        deploy = self.client.post(path, json={"confirmed": True})
         self.assertEqual(deploy.status_code, 201, deploy.text)
         job_id = deploy.json()["id"]
         manifest_path = f"/api/v1/agent/jobs/{job_id}/bundle"
@@ -150,6 +154,37 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(job.type, "RUN_COMMAND")
             self.assertEqual(job.options["command"], "echo hi")
             self.assertTrue(job.options["confirmed"])
+
+    def test_viewer_cannot_read_run_command_payload_or_output(self):
+        created = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"echo top-secret-value", "confirmed":True})
+        self.assertEqual(created.status_code, 201, created.text)
+        job_id = created.json()["id"]
+        with self.Session() as db:
+            job = db.get(Job, job_id)
+            job.status = "succeeded"
+            job.output = "top-secret-value\n"
+            db.commit()
+
+        created_user = self.client.post("/api/v1/admin/users", json={"username":"viewer2", "password":"long-password-for-tests", "role":"viewer"})
+        self.assertEqual(created_user.status_code, 201)
+        with self.Session() as db:
+            db.get(User, created_user.json()["id"]).must_change_password = False
+            db.commit()
+        viewer = TestClient(app)
+        viewer.headers["X-FleetView-Request"] = "1"
+        login = viewer.post("/api/v1/auth/login", json={"username":"viewer2", "password":"long-password-for-tests"})
+        self.assertEqual(login.status_code, 200, login.text)
+        viewer.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+
+        as_viewer = next(item for item in viewer.get("/api/v1/admin/jobs").json() if item["id"] == job_id)
+        self.assertEqual(as_viewer["options"], {})
+        self.assertIsNone(as_viewer["output"])
+        self.assertEqual(as_viewer["status"], "succeeded", "job status itself is still visible to a viewer")
+
+        as_admin = next(item for item in self.client.get("/api/v1/admin/jobs").json() if item["id"] == job_id)
+        self.assertEqual(as_admin["options"]["command"], "echo top-secret-value")
+        self.assertEqual(as_admin["output"], "top-secret-value\n")
+        viewer.close()
 
     def test_run_command_rejects_empty_and_oversized(self):
         empty = self.client.post("/api/v1/admin/devices/new/run-command", json={"command":"", "confirmed":True})

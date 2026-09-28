@@ -267,12 +267,18 @@ async def upload_bundle(request: Request, name: str = Form(...), platform: str =
     return bundle_view(package, db)
 
 
+class ConfirmedAction(BaseModel):
+    confirmed: bool = False
+
+
 @router.post("/api/v1/admin/custom-packages/{package_id}/devices/{device_id}/deploy", dependencies=[Depends(require_admin)], status_code=201)
-def deploy_bundle(package_id: str, device_id: str, db: Session = Depends(get_db)):
+def deploy_bundle(package_id: str, device_id: str, payload: ConfirmedAction, db: Session = Depends(get_db)):
     package = db.get(CustomPackage, package_id)
     device = db.scalar(select(Device).where(Device.id == device_id).with_for_update())
     if not package or not device:
         raise HTTPException(404, "Custom package or device not found")
+    if not payload.confirmed:
+        raise HTTPException(400, "Custom package deployment requires explicit confirmation")
     if not supports_deployment(device):
         raise HTTPException(409, "Upgrade this device's existing agent to 0.14.0 and run a patch scan first")
     if (device.platform == "windows") != (package.platform == "windows"):
@@ -330,8 +336,11 @@ def run_command(device_id: str, payload: RunCommandInput, user=Depends(require_a
         raise HTTPException(409, "Upgrade this device's existing agent to 0.16.0 and run a patch scan first")
     job = Job(device_id=device_id, type="RUN_COMMAND", options={"command": payload.command, "confirmed": True})
     db.add(job)
+    # AccountAudit.details is String(255); truncate to that, not just to
+    # some smaller-looking number, or Postgres rejects the insert outright
+    # for any command longer than 255 characters.
     db.add(AccountAudit(actor=user.username if user else "bootstrap", action="run_command", target=device.hostname,
-                        details=payload.command[:500]))
+                        details=payload.command[:255]))
     db.commit()
     return {"id": job.id, "device_id": device_id}
 
