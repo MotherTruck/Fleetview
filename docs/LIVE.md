@@ -44,9 +44,13 @@ The live channel carries two things:
   (below 0.18.0).
 - **Device details → Remote control**: admin-only tab, hidden for devices
   whose agent doesn't support this yet (below 0.23.0). Unlike the other
-  tabs, it still opens on a supported-but-unavailable device (e.g. no
-  desktop session is currently logged in) rather than hiding entirely --
-  it shows why instead of connecting.
+  tabs it opens its own window (`remote-control.html`) instead of an
+  inline panel -- a live screen view wants more room than fits alongside
+  everything else in the device dialog. That window does its own
+  availability check and shows screen.Detect()'s Reason (no desktop
+  session logged in, a missing tool, etc.) if the device supports remote
+  control but isn't currently available, rather than just failing to
+  connect.
 
 ## The terminal is a real shell, not a queued command
 

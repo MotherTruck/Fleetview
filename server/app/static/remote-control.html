@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Remote control — FleetView</title>
+    <link rel="stylesheet" href="/static/styles.css?v=0.23.1">
+  </head>
+  <body class="remote-control-page">
+    <div class="rc-bar">
+      <div>
+        <strong id="rcHostname">Remote control</strong>
+        <span id="rcStatus" class="panel-note">Loading…</span>
+      </div>
+    </div>
+    <div id="rcStage" class="rc-stage" tabindex="0">
+      <img id="rcFrame" alt="Remote screen" draggable="false" hidden>
+    </div>
+    <script src="/static/remote-control.js?v=0.23.1" defer></script>
+  </body>
+</html>

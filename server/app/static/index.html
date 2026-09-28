@@ -513,7 +513,7 @@ FLEETVIEW_PORT=8080</code></pre>
           <button class="tab" data-detail-tab="installed" role="tab">Installed software</button>
           <button id="dockerContainersTab" class="tab" data-detail-tab="docker" role="tab" hidden>Docker Containers</button>
           <button id="terminalTab" class="tab" data-detail-tab="terminal" role="tab" hidden>Terminal</button>
-          <button id="screenTab" class="tab" data-detail-tab="screen" role="tab" hidden>Remote control</button>
+          <button id="screenTab" class="tab" data-detail-tab="screen" hidden title="Opens in a new window">Remote control ↗</button>
         </div>
         <input id="detailSearch" type="search" placeholder="Search results" aria-label="Search device data">
       </div>
@@ -540,17 +540,6 @@ FLEETVIEW_PORT=8080</code></pre>
         </div>
         <p class="form-note">A real interactive shell on this device, streamed directly to your browser -- not a queued job. Only one terminal session can be open per device at a time, and it ends when this tab closes. Every session is recorded in the account audit log.</p>
         <div id="terminalContainer" class="terminal-container"></div>
-      </div>
-      <div id="detailScreen" class="detail-screen" hidden>
-        <div class="terminal-heading">
-          <div><p class="eyebrow">DIAGNOSTICS</p><h3>Remote control</h3></div>
-          <span id="screenStatus" class="panel-note">Not connected</span>
-        </div>
-        <p class="form-note">A live view of this device's screen, streamed directly to your browser -- not a queued job. Only one remote control session can be open per device at a time, and it ends when this tab closes. Every session is recorded in the account audit log.</p>
-        <p id="screenViewOnlyNote" class="form-note" hidden>This device has no input-capable desktop session (Wayland screen sharing without a compositor portal, most likely) -- you can watch, but clicks and keystrokes are not sent.</p>
-        <div id="screenContainer" class="screen-container" tabindex="0">
-          <img id="screenFrame" class="screen-frame" alt="Remote screen" draggable="false">
-        </div>
       </div>
       <p id="detailTableSummary" class="table-summary"></p>
       <div id="detailTableWrap" class="table-wrap detail-table-wrap">

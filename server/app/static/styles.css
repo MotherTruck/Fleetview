@@ -85,10 +85,13 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--acce
 .terminal-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .terminal-container { height: 480px; background: #0b0f0d; border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-top: 10px; }
 .terminal-container .xterm { height: 100%; }
-.screen-container { background: #0b0f0d; border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-top: 10px; text-align: center; outline: none; }
-.screen-container:focus-visible { border-color: var(--accent); }
-.screen-frame { max-width: 100%; height: auto; border-radius: 6px; cursor: default; }
-.screen-container[data-input="true"] .screen-frame { cursor: crosshair; }
+/* Remote control's own popup window (remote-control.html) */
+body.remote-control-page { min-height: 100vh; display: flex; flex-direction: column; background: #0b0f0d; }
+.rc-bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.rc-bar strong { margin-right: 10px; }
+.rc-stage { flex: 1; display: flex; align-items: center; justify-content: center; outline: none; overflow: hidden; }
+.rc-stage img { max-width: 100%; max-height: 100%; cursor: default; display: block; }
+.rc-stage[data-input="true"] img { cursor: crosshair; }
 .device-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 18px 0; }
 .device-stats div { padding: 10px; background: var(--raised); border-radius: 8px; }
 .device-stats small { display: block; color: var(--muted); margin-bottom: 4px; }
