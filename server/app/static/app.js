@@ -32,6 +32,11 @@ const state = {
   liveMetricsByDevice: new Map(),
   terminalSocket: null,
   terminalDeviceId: null,
+  screenSocket: null,
+  screenDeviceId: null,
+  screenFrameUrl: null,
+  screenInputEnabled: false,
+  screenPointerDown: false,
   topConsumersSort: "cpu_percent",
 };
 
@@ -89,7 +94,7 @@ function wsBase() {
 // delay as long as `shouldReconnect()` still says yes, so a transient
 // server restart or network blip recovers on its own instead of leaving
 // the dashboard silently stale.
-function connectLiveSocket(path, { onMessage, onOpen, onClose, shouldReconnect, retryMs = 3000 }) {
+function connectLiveSocket(path, { onMessage, onBinaryMessage, onOpen, onClose, shouldReconnect, retryMs = 3000 }) {
   const holder = { socket: null, stopped: false };
   if (typeof WebSocket === "undefined") return { close: () => {}, send: () => {} };
   const attempt = () => {
@@ -98,6 +103,13 @@ function connectLiveSocket(path, { onMessage, onOpen, onClose, shouldReconnect, 
     holder.socket = socket;
     socket.addEventListener("open", () => onOpen && onOpen());
     socket.addEventListener("message", (event) => {
+      // Remote-control frames arrive as raw binary WebSocket messages
+      // alongside the usual JSON text control messages (see
+      // server/app/live.py's screen-live relay) -- a Blob here, never JSON.
+      if (event.data instanceof Blob) {
+        onBinaryMessage && onBinaryMessage(event.data);
+        return;
+      }
       try { onMessage(JSON.parse(event.data)); } catch { /* ignore malformed frames */ }
     });
     socket.addEventListener("close", () => {
@@ -245,6 +257,77 @@ function disconnectTerminal() {
   state.xterm = null;
   state.xtermFit = null;
 }
+
+// A live view of the device's screen, streamed over its own per-session
+// WebSocket the same way the terminal's is (see server/app/live.py's
+// screen-live relay): binary JPEG frames in, JSON mouse/keyboard events
+// out. Like the terminal, a dead connection is never auto-reconnected --
+// the server only allows one remote-control session per device at a time
+// (see claim_screen), so a stale reconnect could just collide with a
+// session opened elsewhere. viewOnly (from the device's reported
+// remote_control capability -- e.g. a Wayland session with no
+// portal-based input support) disables sending input without refusing the
+// view itself.
+function connectScreen(deviceId, viewOnly) {
+  if (state.screenDeviceId === deviceId && state.screenSocket) return;
+  disconnectScreen();
+  state.screenDeviceId = deviceId;
+  state.screenInputEnabled = !viewOnly;
+  $("#screenContainer").dataset.input = String(!viewOnly);
+  $("#screenViewOnlyNote").hidden = !viewOnly;
+  $("#screenStatus").textContent = "Connecting…";
+
+  const socket = connectLiveSocket(`/api/v1/admin/devices/${deviceId}/screen-live`, {
+    shouldReconnect: () => false,
+    onOpen: () => { $("#screenStatus").textContent = "Connected · waiting for first frame…"; },
+    onClose: () => { $("#screenStatus").textContent = "Disconnected"; },
+    onMessage: (message) => {
+      if (message.type === "screen_info") {
+        $("#screenStatus").textContent = "Live";
+      } else if (message.type === "screen_closed") {
+        $("#screenStatus").textContent = `Session ended: ${message.reason || "closed"}`;
+        state.screenSocket?.close();
+      } else if (message.type === "error") {
+        $("#screenStatus").textContent = `Error: ${message.reason || "rejected"}`;
+      }
+    },
+    onBinaryMessage: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const previous = state.screenFrameUrl;
+      $("#screenFrame").src = url;
+      state.screenFrameUrl = url;
+      if (previous) URL.revokeObjectURL(previous);
+    },
+  });
+  state.screenSocket = socket;
+}
+
+function disconnectScreen() {
+  if (state.screenFrameUrl) URL.revokeObjectURL(state.screenFrameUrl);
+  state.screenFrameUrl = null;
+  state.screenSocket?.close();
+  state.screenSocket = null;
+  state.screenDeviceId = null;
+  state.screenInputEnabled = false;
+  state.screenPointerDown = false;
+  $("#screenFrame").removeAttribute("src");
+  $("#screenContainer").dataset.input = "false";
+}
+
+// Fraction-based (0-1) coordinates, not raw pixels: the browser only knows
+// this frame's own displayed size, so this is the only way to stay in
+// sync with the agent's actual screen resolution (see agent/internal/live/
+// screen.go and the screen package's pixel() conversion).
+function screenPointerFraction(event) {
+  const rect = $("#screenFrame").getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
+}
+
+const SCREEN_BUTTON_NAMES = ["left", "middle", "right"];
 
 function escapeHtml(value = "") {
   const node = document.createElement("div");
@@ -1564,6 +1647,10 @@ function renderDeviceDetails() {
   const terminalSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 18));
   $("#terminalTab").hidden = !terminalSupported;
   if (!terminalSupported && state.detailTab === "terminal") state.detailTab = "overview";
+  const remoteControl = inventory.remote_control || {};
+  const screenSupported = state.user?.role === "admin" && remoteControl.available === true;
+  $("#screenTab").hidden = !screenSupported;
+  if (!screenSupported && state.detailTab === "screen") state.detailTab = "overview";
   const severities = device.vulnerability_severity_counts || {};
   $("#detailTitle").textContent = device.display_name || device.hostname;
   $("#detailSubtitle").textContent = [device.os_name, device.os_version, device.architecture].filter(Boolean).join(" · ");
@@ -1584,12 +1671,14 @@ function renderDeviceDetails() {
   const overview = state.detailTab === "overview";
   const monitoring = state.detailTab === "monitoring";
   const terminal = state.detailTab === "terminal";
+  const screen = state.detailTab === "screen";
   $("#detailOverview").hidden = !overview;
   $("#detailMonitoring").hidden = !monitoring;
   $("#detailTerminal").hidden = !terminal;
-  $("#detailSearch").hidden = overview || monitoring || terminal;
-  $("#detailTableSummary").hidden = overview || monitoring || terminal;
-  $("#detailTableWrap").hidden = overview || monitoring || terminal;
+  $("#detailScreen").hidden = !screen;
+  $("#detailSearch").hidden = overview || monitoring || terminal || screen;
+  $("#detailTableSummary").hidden = overview || monitoring || terminal || screen;
+  $("#detailTableWrap").hidden = overview || monitoring || terminal || screen;
   $("#patchControls").hidden = state.detailTab !== "patches";
   $("#detailFootnote").textContent = "";
   if (overview) {
@@ -1602,6 +1691,10 @@ function renderDeviceDetails() {
   }
   if (terminal) {
     connectTerminal(device.id);
+    return;
+  }
+  if (screen) {
+    connectScreen(device.id, remoteControl.view_only === true);
     return;
   }
 
@@ -2181,7 +2274,7 @@ $("#authButton").addEventListener("click", async () => {
   } catch (error) { showNotice(error.message, true); }
 });
 $("#closeDeviceDialog").addEventListener("click", () => $("#deviceDialog").close());
-$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); });
+$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); disconnectScreen(); });
 $("#removeDeviceButton").addEventListener("click", async () => {
   const device = state.detailDevice;
   if (!device) return;
@@ -2219,6 +2312,56 @@ $("#deviceDialog").addEventListener("click", async (event) => {
     disconnectDeviceMetrics();
   }
   if (state.detailTab !== "terminal") disconnectTerminal();
+  if (state.detailTab !== "screen") disconnectScreen();
+});
+
+// Remote-control input capture: fraction-based mouse coordinates (see
+// screenPointerFraction) and raw KeyboardEvent.key values, both matching
+// what agent/internal/live/screen.go expects on the other end. mouseup is
+// bound to the window rather than the container so a drag that ends
+// outside the frame still releases the button instead of leaving it
+// stuck down on the remote device.
+$("#screenContainer").addEventListener("mousemove", (event) => {
+  if (!state.screenInputEnabled || !state.screenSocket) return;
+  const point = screenPointerFraction(event);
+  if (point) state.screenSocket.send({ type: "mouse_move", x: point.x, y: point.y });
+});
+$("#screenContainer").addEventListener("mousedown", (event) => {
+  if (!state.screenInputEnabled || !state.screenSocket) return;
+  event.preventDefault();
+  $("#screenContainer").focus();
+  const point = screenPointerFraction(event);
+  const button = SCREEN_BUTTON_NAMES[event.button];
+  if (!point || !button) return;
+  state.screenPointerDown = true;
+  state.screenSocket.send({ type: "mouse_button", x: point.x, y: point.y, button, pressed: true });
+});
+window.addEventListener("mouseup", (event) => {
+  if (!state.screenPointerDown || !state.screenInputEnabled || !state.screenSocket) return;
+  state.screenPointerDown = false;
+  const point = screenPointerFraction(event);
+  const button = SCREEN_BUTTON_NAMES[event.button];
+  if (point && button) state.screenSocket.send({ type: "mouse_button", x: point.x, y: point.y, button, pressed: false });
+});
+$("#screenContainer").addEventListener("contextmenu", (event) => {
+  if (state.screenInputEnabled) event.preventDefault();
+});
+$("#screenContainer").addEventListener("wheel", (event) => {
+  if (!state.screenInputEnabled || !state.screenSocket) return;
+  event.preventDefault();
+  state.screenSocket.send({ type: "mouse_scroll", dx: event.deltaX / 100, dy: event.deltaY / 100 });
+}, { passive: false });
+$("#screenContainer").addEventListener("keydown", (event) => {
+  if (!state.screenInputEnabled || !state.screenSocket) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.screenSocket.send({ type: "key", key: event.key, pressed: true });
+});
+$("#screenContainer").addEventListener("keyup", (event) => {
+  if (!state.screenInputEnabled || !state.screenSocket) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.screenSocket.send({ type: "key", key: event.key, pressed: false });
 });
 $("#deviceDialog").addEventListener("click", async (event) => {
   const button = event.target.closest("#wakeDeviceButton");
