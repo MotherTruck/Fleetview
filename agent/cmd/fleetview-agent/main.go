@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.23.0"
+var version = "0.23.1"
 
 const serviceName = "fleetview-agent"
 
@@ -110,6 +110,11 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 	if err != nil {
 		return err
 	}
+	// Runs on every startup, including the restart a self-upgrade
+	// (UPGRADE_AGENT) triggers, so remote control is fully self-contained:
+	// no separate manual package install step on any Linux box (see
+	// remotecontrol_linux.go; a no-op on Windows).
+	ensureRemoteControlDependencies(logger)
 	settings := model.AgentSettings{
 		MetricsIntervalSeconds:   int(cfg.MetricsInterval.Seconds()),
 		InventoryIntervalSeconds: int(cfg.ScanInterval.Seconds()),

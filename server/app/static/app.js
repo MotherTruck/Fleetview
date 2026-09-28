@@ -1648,7 +1648,12 @@ function renderDeviceDetails() {
   $("#terminalTab").hidden = !terminalSupported;
   if (!terminalSupported && state.detailTab === "terminal") state.detailTab = "overview";
   const remoteControl = inventory.remote_control || {};
-  const screenSupported = state.user?.role === "admin" && remoteControl.available === true;
+  // Gated on the agent's version (matching the server's own
+  // supports_remote_control check), not on remoteControl.available: an
+  // unavailable device still opens the tab so its Reason (no desktop
+  // session found, a missing tool, etc.) is visible rather than the whole
+  // feature just silently not being there.
+  const screenSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 23));
   $("#screenTab").hidden = !screenSupported;
   if (!screenSupported && state.detailTab === "screen") state.detailTab = "overview";
   const severities = device.vulnerability_severity_counts || {};
@@ -1694,7 +1699,14 @@ function renderDeviceDetails() {
     return;
   }
   if (screen) {
-    connectScreen(device.id, remoteControl.view_only === true);
+    if (remoteControl.available === true) {
+      connectScreen(device.id, remoteControl.view_only === true);
+    } else {
+      disconnectScreen();
+      $("#screenContainer").dataset.input = "false";
+      $("#screenViewOnlyNote").hidden = true;
+      $("#screenStatus").textContent = remoteControl.reason || "Not available on this device yet -- it may need to report inventory again after a recent upgrade.";
+    }
     return;
   }
 

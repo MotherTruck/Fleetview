@@ -21,6 +21,11 @@ The live channel carries two things:
   on Windows -- attached to a pseudo-terminal, and streams it to
   [xterm.js](https://xtermjs.org/) in your browser. Typed input and
   resize events go the same way, back to the agent.
+- **Remote control**: admin-only, agents 0.23.0 and later. Opening the
+  **Remote control** tab streams a live view of the device's screen (a
+  JPEG frame every 250ms) and forwards your mouse/keyboard input back to
+  it -- a real interactive session, not a queued job, same model as the
+  terminal.
 
 ## Where it shows up
 
@@ -37,6 +42,11 @@ The live channel carries two things:
 - **Device details → Terminal**: admin-only tab, hidden entirely for
   viewers/operators and for devices whose agent doesn't support this yet
   (below 0.18.0).
+- **Device details → Remote control**: admin-only tab, hidden for devices
+  whose agent doesn't support this yet (below 0.23.0). Unlike the other
+  tabs, it still opens on a supported-but-unavailable device (e.g. no
+  desktop session is currently logged in) rather than hiding entirely --
+  it shows why instead of connecting.
 
 ## The terminal is a real shell, not a queued command
 
@@ -67,6 +77,41 @@ admin-only-anyway dashboard:
   just collide with a session someone else opened in the meantime given
   the one-at-a-time limit above.
 
+## Remote control
+
+Same session model and security properties as the terminal above (admin-
+only, one session per device at a time, every open written to the audit
+log, Origin-checked, never auto-reconnects) -- see that section; this one
+covers what's specific to screen/input instead of a shell.
+
+- **Linux**: needs an active graphical session (X11 or Wayland) actually
+  logged in on the device -- a headless server or a machine sitting at a
+  login screen has nothing to capture. The agent detects this by scanning
+  running processes for one with `DISPLAY`/`XAUTHORITY` (X11) or
+  `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` (Wayland) set, the same technique
+  other Linux remote-access tools use to find a session from a system
+  service with no session of its own.
+- **Required tools are installed automatically, not something you set up
+  by hand.** ImageMagick (`import`, X11 capture) and `xdotool` (X11
+  keyboard input) are installed via the box's own package manager
+  (`apt-get`/`pacman`) the moment the agent notices they're missing --
+  every agent startup checks, including the restart a self-upgrade
+  triggers, so upgrading the agent is the only step needed. Wayland
+  capture uses `grim` the same way, but Wayland has no portal-based input
+  standard the way X11 has XTEST, so a Wayland session is always
+  **view-only**: you can watch, but clicks and keystrokes aren't sent.
+  If a tool genuinely can't be installed (no matching package for that
+  distro, no network access at that moment), the tab explains exactly
+  what's missing rather than just not being there.
+- **Windows**: needs a session attached to the physical console (not a
+  Server Core install or a machine nobody's ever logged into locally).
+  Capture is GDI (`BitBlt`) and input is `SendInput`, both direct Win32
+  calls -- no external tool to install.
+- **Mouse/keyboard coordinates are fraction-based (0.0-1.0), not pixels**:
+  the browser only knows the size of the frame it received, so this is
+  the only way input stays correctly aligned with the agent's actual
+  screen resolution regardless of what either side's window size is.
+
 If this server is running behind the optional Caddy TLS profile (see
 [`docs/TLS.md`](TLS.md)), this traffic is encrypted the same way as
 everything else -- Caddy's `reverse_proxy` handles the WebSocket upgrade
@@ -87,3 +132,11 @@ transparently, no separate configuration needed.
 - Terminal input/output is base64-encoded on the wire: raw shell output
   can contain arbitrary bytes that aren't valid text on their own (split
   multi-byte sequences, control codes), and the transport here is JSON.
+- Remote-control frames are sent as raw binary WebSocket messages instead
+  (no base64 overhead) alongside the same connection's JSON control
+  messages -- the one channel that carries both framings.
+- The Windows screen-capture/input path (`screen_windows.go`) was
+  verified by actually executing the compiled binary under Wine against a
+  real display, not just cross-compiled -- a higher bar than the ConPTY
+  terminal above, which is written against the documented sequence but
+  hasn't been run against real Windows.
