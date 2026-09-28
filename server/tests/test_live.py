@@ -48,6 +48,8 @@ class LiveWebSocketTests(unittest.TestCase):
                           agent_version="0.18.0", agent_token_hash=token_hash("live-secret")))
             db.add(Device(id="live-old", hostname="stale", platform="linux", package_manager="apt",
                           agent_version="0.16.0", agent_token_hash=token_hash("old-secret")))
+            db.add(Device(id="live-newer", hostname="newer", platform="linux", package_manager="apt",
+                          agent_version="0.23.0", agent_token_hash=token_hash("newer-secret")))
             db.commit()
         setup = self.client.post("/api/v1/auth/setup", json={
             "admin_token": "legacy-secret", "username": "admin", "password": "long-password-for-tests"})
@@ -186,6 +188,58 @@ class LiveWebSocketTests(unittest.TestCase):
             # Browser closed its terminal: the agent is told to stop it.
             stop = agent_ws.receive_json()
             self.assertEqual(stop, {"type": "terminal_stop", "session": session_id})
+
+    def test_screen_relay_and_version_gate(self):
+        admin = TestClient(app, cookies=self.admin_cookies)
+        viewer = self.viewer_client()
+
+        with viewer.websocket_connect("/api/v1/admin/devices/live-newer/screen-live", headers={"origin": ORIGIN}) as ws:
+            self.assertEqual(ws.receive_json()["code"], 4403)  # viewer, not admin
+
+        with admin.websocket_connect("/api/v1/admin/devices/live-new/screen-live", headers={"origin": ORIGIN}) as ws:
+            self.assertEqual(ws.receive_json()["code"], 4409)  # 0.18.0 too old for remote control (needs 0.23.0)
+
+        with admin.websocket_connect("/api/v1/admin/devices/live-newer/screen-live", headers={"origin": ORIGIN}) as ws:
+            self.assertEqual(ws.receive_json()["code"], 4410)  # agent not currently connected
+
+        with self.client.websocket_connect(
+            "/api/v1/agent/live", headers={"authorization": "Bearer newer-secret", "x-device-id": "live-newer"}
+        ) as agent_ws:
+            with admin.websocket_connect("/api/v1/admin/devices/live-newer/screen-live", headers={"origin": ORIGIN}) as screen_ws:
+                start = agent_ws.receive_json()
+                self.assertEqual(start["type"], "screen_start")
+                session_id = start["session"]
+
+                # A second concurrent remote-control session for the same device is refused.
+                with admin.websocket_connect("/api/v1/admin/devices/live-newer/screen-live", headers={"origin": ORIGIN}) as second:
+                    self.assertEqual(second.receive_json()["code"], 4429)
+
+                agent_ws.send_json({"type": "screen_info", "session": session_id, "width": 1280, "height": 800})
+                self.assertEqual(screen_ws.receive_json(), {"type": "screen_info", "session": session_id, "width": 1280, "height": 800})
+
+                agent_ws.send_bytes(b"\xff\xd8fake-jpeg-bytes")
+                self.assertEqual(screen_ws.receive_bytes(), b"\xff\xd8fake-jpeg-bytes")
+
+                screen_ws.send_json({"type": "mouse_move", "x": 0.5, "y": 0.25})
+                self.assertEqual(agent_ws.receive_json(), {"type": "mouse_move", "session": session_id, "x": 0.5, "y": 0.25})
+
+                screen_ws.send_json({"type": "mouse_button", "x": 0.5, "y": 0.25, "button": "left", "pressed": True})
+                self.assertEqual(agent_ws.receive_json(), {
+                    "type": "mouse_button", "session": session_id, "x": 0.5, "y": 0.25, "button": "left", "pressed": True,
+                })
+
+                # Out-of-range coordinates are dropped rather than relayed.
+                screen_ws.send_json({"type": "mouse_move", "x": 1.5, "y": 0.25})
+
+                screen_ws.send_json({"type": "mouse_scroll", "dx": 0, "dy": -3})
+                self.assertEqual(agent_ws.receive_json(), {"type": "mouse_scroll", "session": session_id, "dx": 0, "dy": -3})
+
+                screen_ws.send_json({"type": "key", "key": "Enter", "pressed": True})
+                self.assertEqual(agent_ws.receive_json(), {"type": "key", "session": session_id, "key": "Enter", "pressed": True})
+
+            # Browser closed its remote-control session: the agent is told to stop it.
+            stop = agent_ws.receive_json()
+            self.assertEqual(stop, {"type": "screen_stop", "session": session_id})
 
 
 if __name__ == "__main__":

@@ -51,6 +51,13 @@ def supports_live(device: Device) -> bool:
         return False
 
 
+def supports_remote_control(device: Device) -> bool:
+    try:
+        return tuple(int(part) for part in (device.agent_version or "").split(".")[:2]) >= (0, 23)
+    except ValueError:
+        return False
+
+
 def origin_is_trusted(websocket: WebSocket) -> bool:
     """Cross-site WebSocket connections are not blocked by the browser the
     way cross-site form/XHR requests are (that's what the app's CSRF token
@@ -116,6 +123,7 @@ class LiveHub:
         self.metric_viewers: dict[str, set[WebSocket]] = {}
         self.status_viewers: set[WebSocket] = set()
         self.terminal_viewers: dict[str, tuple[WebSocket, str]] = {}
+        self.screen_viewers: dict[str, tuple[WebSocket, str]] = {}
 
     # -- agent connection lifecycle --
     async def agent_connected(self, device_id: str, websocket: WebSocket) -> None:
@@ -130,6 +138,10 @@ class LiveHub:
         if viewer is not None:
             await self._safe_send(viewer[0], {"type": "terminal_closed", "session": viewer[1], "reason": "agent_disconnected"})
             self.release_terminal(device_id, viewer[0])
+        screen_viewer = self.screen_viewers.get(device_id)
+        if screen_viewer is not None:
+            await self._safe_send(screen_viewer[0], {"type": "screen_closed", "session": screen_viewer[1], "reason": "agent_disconnected"})
+            self.release_screen(device_id, screen_viewer[0])
 
     def is_agent_live(self, device_id: str) -> bool:
         return device_id in self.agents
@@ -181,6 +193,22 @@ class LiveHub:
     def terminal_viewer_for(self, device_id: str) -> tuple[WebSocket, str] | None:
         return self.terminal_viewers.get(device_id)
 
+    # -- remote control screen share (single active viewer per device) --
+    def claim_screen(self, device_id: str, websocket: WebSocket) -> str | None:
+        if device_id in self.screen_viewers:
+            return None
+        session_id = uuid.uuid4().hex
+        self.screen_viewers[device_id] = (websocket, session_id)
+        return session_id
+
+    def release_screen(self, device_id: str, websocket: WebSocket) -> None:
+        current = self.screen_viewers.get(device_id)
+        if current is not None and current[0] is websocket:
+            del self.screen_viewers[device_id]
+
+    def screen_viewer_for(self, device_id: str) -> tuple[WebSocket, str] | None:
+        return self.screen_viewers.get(device_id)
+
     async def send_to_agent(self, device_id: str, payload: dict) -> bool:
         agent = self.agents.get(device_id)
         if agent is None:
@@ -195,6 +223,14 @@ class LiveHub:
     async def _safe_send(websocket: WebSocket, payload: dict, on_fail=None) -> None:
         try:
             await websocket.send_json(payload)
+        except Exception:
+            if on_fail is not None:
+                on_fail()
+
+    @staticmethod
+    async def _safe_send_bytes(websocket: WebSocket, data: bytes, on_fail=None) -> None:
+        try:
+            await websocket.send_bytes(data)
         except Exception:
             if on_fail is not None:
                 on_fail()
@@ -229,7 +265,22 @@ async def agent_live(websocket: WebSocket) -> None:
     await hub.agent_connected(device.id, websocket)
     try:
         while True:
-            raw = await websocket.receive_text()
+            envelope = await websocket.receive()
+            if envelope["type"] == "websocket.disconnect":
+                raise WebSocketDisconnect(envelope.get("code", 1000))
+            frame = envelope.get("bytes")
+            if frame is not None:
+                # A remote-control JPEG frame: relayed opaquely, never parsed
+                # as JSON, straight to whichever browser currently holds this
+                # device's screen session (if any -- a frame arriving after
+                # the viewer has already gone is simply dropped).
+                viewer = hub.screen_viewer_for(device.id)
+                if viewer is not None:
+                    await hub._safe_send_bytes(viewer[0], frame)
+                continue
+            raw = envelope.get("text")
+            if raw is None:
+                continue
             try:
                 message = json.loads(raw)
             except ValueError:
@@ -244,6 +295,10 @@ async def agent_live(websocket: WebSocket) -> None:
                 await hub.broadcast_metrics(device.id, {"type": "metrics", "device_id": device.id, **parsed.model_dump(mode="json")})
             elif message_type in ("terminal_output", "terminal_closed"):
                 viewer = hub.terminal_viewer_for(device.id)
+                if viewer is not None and viewer[1] == message.get("session"):
+                    await hub._safe_send(viewer[0], message)
+            elif message_type in ("screen_info", "screen_closed"):
+                viewer = hub.screen_viewer_for(device.id)
                 if viewer is not None and viewer[1] == message.get("session"):
                     await hub._safe_send(viewer[0], message)
     except WebSocketDisconnect:
@@ -361,3 +416,78 @@ async def browser_terminal_live(websocket: WebSocket, device_id: str) -> None:
     finally:
         hub.release_terminal(device_id, websocket)
         await hub.send_to_agent(device_id, {"type": "terminal_stop", "session": session_id})
+
+
+@router.websocket("/api/v1/admin/devices/{device_id}/screen-live")
+async def browser_screen_live(websocket: WebSocket, device_id: str) -> None:
+    if not origin_is_trusted(websocket):
+        await _reject(websocket, 4403, "Origin not trusted")
+        return
+    user = _authenticate_session_user(websocket.cookies.get(SESSION_COOKIE, ""))
+    if user is None:
+        await _reject(websocket, 4401, "Sign in to continue")
+        return
+    if user.role != "admin" or user.must_change_password:
+        await _reject(websocket, 4403, "Admin access required")
+        return
+    device = _lookup_device(device_id)
+    if device is None:
+        await _reject(websocket, 4404, "Device not found")
+        return
+    if not supports_remote_control(device):
+        await _reject(websocket, 4409, "Upgrade this device's agent to 0.23.0 for remote control")
+        return
+    if not hub.is_agent_live(device_id):
+        await _reject(websocket, 4410, "Device is not currently connected")
+        return
+    session_id = hub.claim_screen(device_id, websocket)
+    if session_id is None:
+        await _reject(websocket, 4429, "A remote control session is already open for this device")
+        return
+    await websocket.accept()
+    _record_audit(user.username, "screen_open", device.hostname, session_id)
+    started = await hub.send_to_agent(device_id, {"type": "screen_start", "session": session_id})
+    if not started:
+        await websocket.send_json({"type": "screen_closed", "session": session_id, "reason": "agent_unavailable"})
+        hub.release_screen(device_id, websocket)
+        await websocket.close()
+        return
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            if len(raw) > MAX_TERMINAL_MESSAGE:
+                continue
+            try:
+                message = json.loads(raw)
+            except ValueError:
+                continue
+            message_type = message.get("type")
+            if message_type == "mouse_move":
+                x, y = message.get("x"), message.get("y")
+                if _is_unit_fraction(x) and _is_unit_fraction(y):
+                    await hub.send_to_agent(device_id, {"type": "mouse_move", "session": session_id, "x": x, "y": y})
+            elif message_type == "mouse_button":
+                x, y = message.get("x"), message.get("y")
+                button, pressed = message.get("button"), message.get("pressed")
+                if _is_unit_fraction(x) and _is_unit_fraction(y) and isinstance(button, str) and isinstance(pressed, bool):
+                    await hub.send_to_agent(device_id, {
+                        "type": "mouse_button", "session": session_id,
+                        "x": x, "y": y, "button": button, "pressed": pressed,
+                    })
+            elif message_type == "mouse_scroll":
+                dx, dy = message.get("dx"), message.get("dy")
+                if isinstance(dx, (int, float)) and not isinstance(dx, bool) and isinstance(dy, (int, float)) and not isinstance(dy, bool):
+                    await hub.send_to_agent(device_id, {"type": "mouse_scroll", "session": session_id, "dx": dx, "dy": dy})
+            elif message_type == "key":
+                key, pressed = message.get("key"), message.get("pressed")
+                if isinstance(key, str) and 0 < len(key) <= 32 and isinstance(pressed, bool):
+                    await hub.send_to_agent(device_id, {"type": "key", "session": session_id, "key": key, "pressed": pressed})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.release_screen(device_id, websocket)
+        await hub.send_to_agent(device_id, {"type": "screen_stop", "session": session_id})
+
+
+def _is_unit_fraction(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 1.0
