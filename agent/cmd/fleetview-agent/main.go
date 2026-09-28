@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.22.0"
+var version = "0.23.0"
 
 const serviceName = "fleetview-agent"
 

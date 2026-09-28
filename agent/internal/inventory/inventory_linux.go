@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fleetview-agent/internal/containers"
+	"fleetview-agent/internal/screen"
 )
 
 func Collect(dockerInventoryEnabled bool) (System, error) {
@@ -39,6 +40,7 @@ func Collect(dockerInventoryEnabled bool) (System, error) {
 		"ip_addresses":              ipAddresses(),
 		"mac_addresses":             macAddresses(),
 		"uptime_seconds":            uptimeSeconds(),
+		"remote_control":            screen.Detect(),
 	}
 	if dockerInventoryEnabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)

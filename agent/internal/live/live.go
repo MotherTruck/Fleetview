@@ -30,6 +30,17 @@ import (
 	"fleetview-agent/internal/telemetry"
 )
 
+// wsMessage is one entry in the single outbound write queue every write to
+// the connection funnels through (nhooyr's Conn.Write must never be called
+// concurrently from multiple goroutines) -- JSON control messages
+// (MessageText) and raw remote-control JPEG frames (MessageBinary) share
+// this same queue and writer goroutine, just tagged with which framing to
+// use.
+type wsMessage struct {
+	msgType websocket.MessageType
+	data    []byte
+}
+
 // topConsumersLimit bounds the merged process+container list sent with each
 // metrics tick (see telemetry.TopConsumers): up to this many by CPU and up
 // to this many by memory, deduplicated.
@@ -56,13 +67,20 @@ type liveMetricsMessage struct {
 }
 
 type inboundMessage struct {
-	Type    string `json:"type"`
-	Session string `json:"session"`
-	Cols    int    `json:"cols"`
-	Rows    int    `json:"rows"`
-	Data    string `json:"data"`
-	Code    int    `json:"code"`
-	Reason  string `json:"reason"`
+	Type    string  `json:"type"`
+	Session string  `json:"session"`
+	Cols    int     `json:"cols"`
+	Rows    int     `json:"rows"`
+	Data    string  `json:"data"`
+	Code    int     `json:"code"`
+	Reason  string  `json:"reason"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Button  string  `json:"button"`
+	Pressed bool    `json:"pressed"`
+	DeltaX  float64 `json:"dx"`
+	DeltaY  float64 `json:"dy"`
+	Key     string  `json:"key"`
 }
 
 // Run dials the server's live endpoint and keeps it connected until ctx is
@@ -142,7 +160,7 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	writeCh := make(chan []byte, writeQueueSize)
+	writeCh := make(chan wsMessage, writeQueueSize)
 	var writeWG sync.WaitGroup
 	writeWG.Add(1)
 	go func() {
@@ -151,11 +169,11 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 			select {
 			case <-sessionCtx.Done():
 				return
-			case data, ok := <-writeCh:
+			case msg, ok := <-writeCh:
 				if !ok {
 					return
 				}
-				if err := conn.Write(sessionCtx, websocket.MessageText, data); err != nil {
+				if err := conn.Write(sessionCtx, msg.msgType, msg.data); err != nil {
 					return
 				}
 			}
@@ -168,7 +186,7 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 			return
 		}
 		select {
-		case writeCh <- data:
+		case writeCh <- wsMessage{websocket.MessageText, data}:
 		case <-sessionCtx.Done():
 		default:
 			// Backed up (a terminal is streaming heavily): drop this
@@ -176,9 +194,20 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 			// tick supersedes it anyway.
 		}
 	}
+	sendBinary := func(data []byte) {
+		select {
+		case writeCh <- wsMessage{websocket.MessageBinary, data}:
+		case <-sessionCtx.Done():
+		default:
+			// Backed up: drop this remote-control frame rather than block
+			// or grow unbounded. The next capture tick supersedes it.
+		}
+	}
 
 	term := &terminalHandler{send: send, logger: logger}
 	defer term.stop()
+	scr := &screenHandler{send: send, sendBinary: sendBinary, logger: logger}
+	defer scr.stop()
 
 	writeWG.Add(1)
 	go func() {
@@ -200,14 +229,14 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 		}
 	}()
 
-	readErr := readLoop(sessionCtx, conn, term)
+	readErr := readLoop(sessionCtx, conn, term, scr)
 	cancel()
 	close(writeCh)
 	writeWG.Wait()
 	return readErr
 }
 
-func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler) error {
+func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, scr *screenHandler) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -235,6 +264,18 @@ func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler) 
 			term.resize(message.Session, message.Cols, message.Rows)
 		case "terminal_stop":
 			term.stopSession(message.Session)
+		case "screen_start":
+			scr.start(message.Session)
+		case "mouse_move":
+			scr.mouseMove(message.Session, message.X, message.Y)
+		case "mouse_button":
+			scr.mouseButton(message.Session, message.X, message.Y, message.Button, message.Pressed)
+		case "mouse_scroll":
+			scr.mouseScroll(message.Session, message.DeltaX, message.DeltaY)
+		case "key":
+			scr.key(message.Session, message.Key, message.Pressed)
+		case "screen_stop":
+			scr.stopSession(message.Session)
 		}
 	}
 }
