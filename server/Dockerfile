@@ -40,7 +40,8 @@ COPY scripts/upgrade-agent-in-place.sh /opt/fleetview-install/source/scripts/upg
 COPY scripts/upgrade-agent-in-place.ps1 /opt/fleetview-install/source/scripts/upgrade-agent-in-place.ps1
 COPY scripts/remote-install-linux.sh /opt/fleetview-install/install-linux.sh
 RUN python -c "import tarfile; t=tarfile.open('/opt/fleetview-install/agent-source.tar.gz','w:gz'); t.add('/opt/fleetview-install/source/agent',arcname='agent'); t.add('/opt/fleetview-install/source/scripts',arcname='scripts'); t.close()" \
-    && chmod 0644 /opt/fleetview-install/agent-source.tar.gz /opt/fleetview-install/install-linux.sh
+    && sha256sum /opt/fleetview-install/agent-source.tar.gz | cut -d' ' -f1 > /opt/fleetview-install/agent-source.sha256 \
+    && chmod 0644 /opt/fleetview-install/agent-source.tar.gz /opt/fleetview-install/agent-source.sha256 /opt/fleetview-install/install-linux.sh
 COPY --from=agent-build /out /opt/fleetview-install/agent-bin
 RUN chmod 0755 /opt/fleetview-install/agent-bin/linux-amd64/fleetview-agent /opt/fleetview-install/agent-bin/windows-amd64/fleetview-agent.exe \
     && chmod 0644 /opt/fleetview-install/agent-bin/manifest.json

@@ -56,12 +56,16 @@ distribution step for a normal install: the certificate is trusted
 correctly from the very first run.
 
 That one CA fetch happens over an unverified connection — trust-on-first-
-use, the same exposure the rest of the unauthenticated install flow
-already has (the agent source tarball itself is fetched the same way).
-Everything the agent does afterward, every job poll and result upload,
-validates against the pinned CA for real. If you want a stronger guarantee
-than trust-on-first-use for that one bootstrap fetch, use Option A below
-to pre-stage the CA file instead of letting the installer fetch it.
+use. The agent source tarball fetched right after it is checked against a
+SHA-256 the server publishes at image build time, which catches transport
+corruption or a MITM limited to tampering with only one of those two
+requests, but not one who actively controls the whole first connection
+(they could substitute a matching checksum for their own tarball too) --
+only a certificate the OS already trusts from the start closes that
+completely. Everything the agent does afterward, every job poll and result
+upload, validates against the pinned CA for real. If you want a stronger
+guarantee than trust-on-first-use for that one bootstrap fetch, use Option
+A below to pre-stage the CA file instead of letting the installer fetch it.
 
 ## 3. Trust the certificate (browser, or a stronger guarantee than TOFU)
 

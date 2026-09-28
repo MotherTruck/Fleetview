@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -253,6 +253,18 @@ def linux_agent_source() -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Agent source bundle is not available")
     return FileResponse(path, media_type="application/gzip", filename="fleetview-agent-source.tar.gz")
+
+
+@app.get("/install/agent-source.sha256", include_in_schema=False)
+def linux_agent_source_checksum() -> PlainTextResponse:
+    # Computed at image build time (see server/Dockerfile) from the exact
+    # agent-source.tar.gz served above, so the installer can verify it
+    # wasn't corrupted or substituted in transit before compiling and
+    # running it as root.
+    path = INSTALL_DIR / "agent-source.sha256"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Agent source checksum is not available")
+    return PlainTextResponse(path.read_text().strip())
 
 
 @app.get("/install/agent-version", include_in_schema=False)

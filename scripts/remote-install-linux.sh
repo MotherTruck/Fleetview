@@ -31,11 +31,10 @@ trap 'rm -rf "$temporary_directory"' EXIT
 # If this server is reached over HTTPS with a private CA (the project's
 # optional Caddy tls profile — see docs/TLS.md), fetch that CA once over an
 # unverified connection and use it for everything after, rather than
-# leaving TLS unverified for the whole install. This one bootstrap fetch
-# has the same trust-on-first-use exposure the rest of this unauthenticated
-# install already has (the agent source tarball itself is fetched the same
-# way); a server on plain HTTP, or behind a real publicly-trusted
-# certificate, needs none of this and ca_file simply stays empty.
+# leaving TLS unverified for the whole install. This one bootstrap fetch is
+# trust-on-first-use: a server on plain HTTP, or behind a real
+# publicly-trusted certificate, needs none of this and ca_file simply stays
+# empty.
 ca_file=""
 download_opts=(-fsSL)
 if [[ "$server_url" == https://* ]]; then
@@ -50,6 +49,28 @@ if [[ "$server_url" == https://* ]]; then
 fi
 
 curl "${download_opts[@]}" "${server_url%/}/install/agent-source.tar.gz" -o "$temporary_directory/agent-source.tar.gz"
+
+# Verify against the checksum the server computed at image build time (see
+# server/Dockerfile), catching corruption or substitution in transit before
+# this gets extracted and compiled as root. This is a real but partial
+# defense: fetched over the same first connection as the tarball itself, it
+# cannot detect an attacker who actively controls that entire connection
+# (they could substitute a matching checksum for their own tarball just as
+# easily) -- only a certificate the OS already trusts from the start (no
+# trust-on-first-use gap at all) closes that fully. It does catch transport
+# corruption, a compromised cache, or a MITM limited to altering only one of
+# these two requests.
+expected_sha="$(curl "${download_opts[@]}" "${server_url%/}/install/agent-source.sha256" 2>/dev/null || true)"
+if [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
+  actual_sha="$(sha256sum "$temporary_directory/agent-source.tar.gz" | cut -d' ' -f1)"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    echo "Agent source checksum mismatch (expected $expected_sha, got $actual_sha); refusing to install." >&2
+    exit 1
+  fi
+else
+  echo "Server did not publish a valid agent source checksum; continuing without verifying it." >&2
+fi
+
 tar -xzf "$temporary_directory/agent-source.tar.gz" -C "$temporary_directory"
 
 (cd "$temporary_directory/agent" && go build -trimpath -ldflags="-s -w" -o fleetview-agent ./cmd/fleetview-agent)
