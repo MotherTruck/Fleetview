@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.7", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace"] }
@@ -22,9 +23,11 @@ hmac = "0.12"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 rand = "0.8"
 base64 = "0.22"
+time = "0.3"
 subtle = "2"
 hex = "0.4"
 anyhow = "1"
+async-trait = "0.1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
