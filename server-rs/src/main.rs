@@ -7,6 +7,7 @@ mod enrollment;
 mod error;
 mod live;
 mod models;
+mod reports;
 mod security;
 
 use axum::{routing::get, Json, Router};
@@ -35,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(devices::router())
         .merge(deployment::router())
         .merge(live::router())
+        .merge(reports::router())
         .with_state(state);
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
