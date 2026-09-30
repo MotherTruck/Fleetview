@@ -9,7 +9,7 @@ Supported endpoints: Arch Linux/CachyOS (pacman), Debian/Ubuntu (APT), and Windo
 ## Architecture
 
 ```text
-Browser ── frontend ──► FastAPI server ── backend ──► PostgreSQL
+Browser ── frontend ──► Rust (axum) server ── backend ──► PostgreSQL
                               ▲
                               │ outbound HTTP(S)
                               │
@@ -85,7 +85,7 @@ Three fleet-wide roles, enforced server-side on every request:
 Create accounts under **Admin → User management**; a new user gets a temporary password and must change it at next sign-in. Sessions last 12 hours; passwords are hashed with PBKDF2-SHA256 (600,000 iterations). If every admin password is lost, recover locally on the Docker host:
 
 ```bash
-sudo docker compose exec server python -m app.manage_users YOUR_ADMIN_USERNAME
+sudo docker compose exec server ./fleetview-server manage-users YOUR_ADMIN_USERNAME
 ```
 
 ## Adding a Linux device
@@ -165,9 +165,11 @@ agent/                 Go endpoint agent
   cmd/fleetview-agent/       executable entry point
   internal/            inventory, packages, telemetry, live channel, vulnerability, config
   packaging/           systemd unit and example environment file
-server/                FastAPI service and embedded dashboard
-  app/accounts.py      account/session API (login, setup, user management)
-  app/manage_users.py  local admin-recovery console command
+server-rs/              Rust (axum/sqlx) service -- what server/Dockerfile actually builds and deploys
+  src/accounts.rs       account/session API (login, setup, user management)
+  src/main.rs            entry point; also handles `manage-users` (local admin recovery, see above)
+  migrations/            Postgres schema
+server/                 original Python/FastAPI implementation, kept for reference only -- not built or deployed
 scripts/               install/upgrade/diagnostic helpers
 docs/                  feature guides (see links above)
 docker-compose.yml     server and PostgreSQL deployment
@@ -176,9 +178,9 @@ docker-compose.yml     server and PostgreSQL deployment
 ## Development checks
 
 ```bash
-python3 -m py_compile server/app/*.py
-node --check server/app/static/app.js
+cd server-rs && cargo build && cargo test   # needs a local Postgres -- see server-rs/README.md
 cd agent && go test ./...
+node --check server/app/static/app.js
 ```
 
 `server/tests/ui_dom_test.cjs` is a jsdom-based smoke test of the dashboard's own JS, without a real browser — a fast sanity check, not a substitute for testing in one. It needs `jsdom` installed locally (`npm install jsdom` in a scratch directory is enough; nothing is added to this repo for it):

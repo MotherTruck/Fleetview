@@ -8,6 +8,7 @@ mod enrollment;
 mod error;
 mod integrations;
 mod live;
+mod manage_users;
 mod models;
 mod reports;
 mod secrets_crypto;
@@ -30,6 +31,20 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("manage-users") {
+        let Some(username) = args.get(2) else {
+            eprintln!("usage: fleetview-server manage-users USERNAME");
+            std::process::exit(2);
+        };
+        let pool = db::connect().await?;
+        if let Err(err) = manage_users::run(&pool, username).await {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();

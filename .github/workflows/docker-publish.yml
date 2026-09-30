@@ -6,6 +6,7 @@ on:
     tags: ["v*.*.*"]
     paths:
       - server/**
+      - server-rs/**
       - agent/**
       - scripts/uninstall-agent.sh
       - scripts/install-agent.ps1

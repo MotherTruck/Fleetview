@@ -1,9 +1,10 @@
-# fleetview-server (Rust port, in progress)
+# fleetview-server (Rust)
 
-A from-scratch Rust reimplementation of `server/` (Python/FastAPI), built
-incrementally alongside it. See the repo's task list for progress; the
-Python server remains the one actually deployed (`server/Dockerfile`,
-`docker-compose.yml`) until this reaches full parity and is cut over.
+The management server -- what `server/Dockerfile` and `docker-compose.yml`
+actually build and deploy. Originally written as a from-scratch Rust
+reimplementation of `server/` (Python/FastAPI) built incrementally
+alongside it; that Python implementation is now kept in the repo for
+reference only and is no longer built or run.
 
 Axum + tokio + sqlx, Postgres only: production always runs Postgres (see
 `../docker-compose.yml`), so this targets it exclusively rather than also
