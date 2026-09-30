@@ -5,6 +5,7 @@ mod deployment;
 mod devices;
 mod enrollment;
 mod error;
+mod live;
 mod models;
 mod security;
 
@@ -13,9 +14,9 @@ use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-#[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub hub: live::LiveHub,
 }
 
 #[tokio::main]
@@ -25,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let pool = db::connect().await?;
-    let state = Arc::new(AppState { db: pool });
+    let state = Arc::new(AppState { db: pool, hub: live::LiveHub::new() });
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -33,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(enrollment::router())
         .merge(devices::router())
         .merge(deployment::router())
+        .merge(live::router())
         .with_state(state);
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());

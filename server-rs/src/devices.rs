@@ -187,7 +187,7 @@ async fn get_fleet_settings(state: &AppState) -> Result<FleetSettings, ApiError>
     })
 }
 
-fn device_view(device: &Device, fleet: &FleetSettings, include_packages: bool) -> Value {
+fn device_view(device: &Device, fleet: &FleetSettings, hub: &crate::live::LiveHub, include_packages: bool) -> Value {
     let online = device.last_seen >= Utc::now() - Duration::minutes(2);
     let inventory = &device.inventory;
     let security = inventory.get("_security").cloned().unwrap_or(json!({}));
@@ -239,7 +239,7 @@ fn device_view(device: &Device, fleet: &FleetSettings, include_packages: bool) -
         "last_seen": device.last_seen,
         "last_scan_at": device.last_scan_at,
         "online": online,
-        "live": false, // wired to the real live hub in a later increment
+        "live": hub.is_agent_live(&device.id),
         "update_count": device.update_count,
         "security_update_count": device.security_update_count,
         "inventory": public_inventory,
@@ -549,7 +549,7 @@ async fn report_vulnerabilities(
 }
 
 #[derive(Deserialize, Serialize)]
-struct MetricsReportPayload {
+pub(crate) struct MetricsReportPayload {
     recorded_at: DateTime<Utc>,
     cpu_percent: f64,
     memory_used_bytes: i64,
@@ -817,7 +817,7 @@ async fn list_devices(State(state): State<Arc<AppState>>, _viewer: Viewer) -> Re
     .fetch_all(&state.db)
     .await?;
     let fleet = get_fleet_settings(&state).await?;
-    Ok(Json(devices.iter().map(|d| device_view(d, &fleet, false)).collect()))
+    Ok(Json(devices.iter().map(|d| device_view(d, &fleet, &state.hub, false)).collect()))
 }
 
 async fn get_device(
@@ -829,7 +829,7 @@ async fn get_device(
         return Err(ApiError::not_found("Device not found"));
     };
     let fleet = get_fleet_settings(&state).await?;
-    Ok(Json(device_view(&device, &fleet, true)))
+    Ok(Json(device_view(&device, &fleet, &state.hub, true)))
 }
 
 async fn delete_device(
