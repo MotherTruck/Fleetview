@@ -1,6 +1,7 @@
 mod accounts;
 mod auth;
 mod db;
+mod devices;
 mod enrollment;
 mod error;
 mod models;
@@ -29,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .merge(accounts::router())
         .merge(enrollment::router())
+        .merge(devices::router())
         .with_state(state);
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
