@@ -1,21 +1,20 @@
-//! Mirrors server/app/accounts.py's setup/login/me/logout slice (the rest
-//! -- user CRUD, password change, full throttling refinement -- follows in
-//! a later increment; this one exists to prove the auth chain in auth.rs
-//! works end-to-end against a real login flow).
-use axum::extract::State;
+//! Mirrors server/app/accounts.py in full: setup/login/me/logout, password
+//! change, and admin user management + the recent-audit-log endpoint.
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use axum_extra::extract::CookieJar;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::Row;
 use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
-use crate::auth::{CurrentUser, SESSION_COOKIE};
+use crate::auth::{Admin, CurrentUser, SESSION_COOKIE};
 use crate::error::ApiError;
 use crate::security::{new_agent_token, password_hash, secure_equal, token_hash, verify_password};
 use crate::AppState;
@@ -27,6 +26,20 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/me", get(me))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/password", post(change_password))
+        .route("/api/v1/admin/users", get(list_users).post(create_user))
+        .route("/api/v1/admin/users/:id", put(edit_user))
+        .route("/api/v1/admin/users/audit/recent", get(audit_history))
+}
+
+/// account_admin in the Python server: like Admin, but the legacy
+/// pre-setup token bootstrap cannot create/edit arbitrary users (there's
+/// no real actor to attribute the action to).
+fn require_real_admin(admin: &Admin) -> Result<&crate::models::User, ApiError> {
+    admin
+        .0
+        .user()
+        .ok_or_else(|| ApiError::forbidden("Complete account setup first"))
 }
 
 /// A random password's hash, computed once at first use and reused for
@@ -386,4 +399,266 @@ fn client_ip(headers: &HeaderMap) -> String {
         .unwrap_or("unknown")
         .trim()
         .to_string()
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordPayload {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    State(state): State<Arc<AppState>>,
+    current: CurrentUser,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(payload): Json<ChangePasswordPayload>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_browser_write(&headers)?;
+    if payload.new_password.len() < 12 || payload.new_password.len() > 128 {
+        return Err(ApiError::bad_request("New password must be at least 12 characters"));
+    }
+    let peer = client_ip(&headers);
+    throttle(&state, &peer, &format!("password:{}", current.user.id)).await?;
+
+    // Re-read under lock: the hash used above (from the extractor) could
+    // already be stale if a concurrent request changed it.
+    let mut tx = state.db.begin().await?;
+    let password_hash_row: String =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 FOR UPDATE")
+            .bind(&current.user.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !verify_password(&payload.current_password, &password_hash_row) {
+        return Err(ApiError::bad_request("Current password is incorrect"));
+    }
+    if payload.current_password == payload.new_password {
+        return Err(ApiError::bad_request("Choose a different password"));
+    }
+    let new_hash = password_hash(&payload.new_password);
+    sqlx::query("UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2")
+        .bind(&new_hash)
+        .bind(&current.user.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+        .bind(&current.user.id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'password_changed', $1, '')")
+        .bind(&current.user.username)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let jar = jar.remove(Cookie::from(SESSION_COOKIE));
+    Ok((StatusCode::NO_CONTENT, jar))
+}
+
+async fn list_users(State(state): State<Arc<AppState>>, admin: Admin) -> Result<Json<Vec<UserView>>, ApiError> {
+    require_real_admin(&admin)?;
+    let users = sqlx::query_as::<_, crate::models::User>(
+        "SELECT id, username, password_hash, role, active, must_change_password, created_at, last_login_at \
+         FROM users ORDER BY username",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(users.iter().map(UserView::from).collect()))
+}
+
+#[derive(Deserialize)]
+struct CreateUserPayload {
+    username: String,
+    password: String,
+    #[serde(default = "default_role")]
+    role: String,
+}
+
+fn default_role() -> String {
+    "viewer".to_string()
+}
+
+fn valid_role(role: &str) -> bool {
+    matches!(role, "admin" | "operator" | "viewer")
+}
+
+async fn create_user(
+    State(state): State<Arc<AppState>>,
+    admin: Admin,
+    Json(payload): Json<CreateUserPayload>,
+) -> Result<impl IntoResponse, ApiError> {
+    let actor = require_real_admin(&admin)?;
+    if payload.password.len() < 12 || payload.password.len() > 128 {
+        return Err(ApiError::bad_request("Password must be at least 12 characters"));
+    }
+    let username = payload.username.to_lowercase();
+    if !valid_username(&username) {
+        return Err(ApiError::bad_request("Invalid username"));
+    }
+    if !valid_role(&payload.role) {
+        return Err(ApiError::bad_request("Invalid role"));
+    }
+
+    let mut tx = state.db.begin().await?;
+    // Lock against concurrent admin edits the same way the Python server
+    // does (SELECT ... FOR UPDATE on the auth_control singleton), then
+    // re-verify the actor is still an active admin under that lock.
+    sqlx::query("SELECT id FROM auth_control WHERE id = 1 FOR UPDATE")
+        .fetch_optional(&mut *tx)
+        .await?;
+    let (actor_active, actor_role): (bool, String) =
+        sqlx::query_as("SELECT active, role FROM users WHERE id = $1")
+            .bind(&actor.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !actor_active || actor_role != "admin" {
+        return Err(ApiError::forbidden("Admin access required"));
+    }
+
+    let user_id = Uuid::new_v4().to_string();
+    let inserted = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role, active, must_change_password) \
+         VALUES ($1, $2, $3, $4, true, true) ON CONFLICT (username) DO NOTHING",
+    )
+    .bind(&user_id)
+    .bind(&username)
+    .bind(password_hash(&payload.password))
+    .bind(&payload.role)
+    .execute(&mut *tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Err(ApiError::conflict("Username already exists"));
+    }
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'user_created', $2, $3)")
+        .bind(&actor.username)
+        .bind(&username)
+        .bind(format!("role={}", payload.role))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let user = fetch_user_by_id(&state, &user_id).await?;
+    Ok((StatusCode::CREATED, Json(UserView::from(&user))))
+}
+
+#[derive(Deserialize)]
+struct EditUserPayload {
+    role: String,
+    active: bool,
+    password: Option<String>,
+}
+
+async fn edit_user(
+    State(state): State<Arc<AppState>>,
+    admin: Admin,
+    Path(user_id): Path<String>,
+    Json(payload): Json<EditUserPayload>,
+) -> Result<Json<UserView>, ApiError> {
+    let actor = require_real_admin(&admin)?;
+    if !valid_role(&payload.role) {
+        return Err(ApiError::bad_request("Invalid role"));
+    }
+    if let Some(password) = &payload.password {
+        if password.len() < 12 || password.len() > 128 {
+            return Err(ApiError::bad_request("Password must be at least 12 characters"));
+        }
+    }
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SELECT id FROM auth_control WHERE id = 1 FOR UPDATE")
+        .fetch_optional(&mut *tx)
+        .await?;
+    let (actor_active, actor_role): (bool, String) =
+        sqlx::query_as("SELECT active, role FROM users WHERE id = $1")
+            .bind(&actor.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !actor_active || actor_role != "admin" {
+        return Err(ApiError::forbidden("Admin access required"));
+    }
+
+    let target = sqlx::query("SELECT id, role, active, username FROM users WHERE id = $1 FOR UPDATE")
+        .bind(&user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(target) = target else {
+        return Err(ApiError::not_found("User not found"));
+    };
+    let target_role: String = target.get("role");
+    let target_active: bool = target.get("active");
+    let target_username: String = target.get("username");
+
+    if target_role == "admin" && target_active && (payload.role != "admin" || !payload.active) {
+        let admin_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM users WHERE active = true AND role = 'admin'",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if admin_count <= 1 {
+            return Err(ApiError::conflict("Keep at least one active administrator"));
+        }
+    }
+    if payload.password.is_some() && user_id == actor.id {
+        return Err(ApiError::bad_request("Use Change password to change your own password"));
+    }
+
+    if let Some(password) = &payload.password {
+        sqlx::query(
+            "UPDATE users SET role = $1, active = $2, password_hash = $3, must_change_password = true WHERE id = $4",
+        )
+        .bind(&payload.role)
+        .bind(payload.active)
+        .bind(password_hash(password))
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query("UPDATE users SET role = $1, active = $2 WHERE id = $3")
+            .bind(&payload.role)
+            .bind(payload.active)
+            .bind(&user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'user_updated', $2, $3)")
+        .bind(&actor.username)
+        .bind(&target_username)
+        .bind(format!(
+            "role={}; active={}; password_reset={}",
+            payload.role,
+            payload.active,
+            payload.password.is_some()
+        ))
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let user = fetch_user_by_id(&state, &user_id).await?;
+    Ok(Json(UserView::from(&user)))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct AuditEntry {
+    actor: String,
+    action: String,
+    target: String,
+    details: String,
+    created_at: DateTime<Utc>,
+}
+
+async fn audit_history(
+    State(state): State<Arc<AppState>>,
+    admin: Admin,
+) -> Result<Json<Vec<AuditEntry>>, ApiError> {
+    require_real_admin(&admin)?;
+    let rows = sqlx::query_as::<_, AuditEntry>(
+        "SELECT actor, action, target, details, created_at FROM account_audit ORDER BY id DESC LIMIT 100",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
 }
