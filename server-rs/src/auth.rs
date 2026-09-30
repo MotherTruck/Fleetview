@@ -145,6 +145,10 @@ impl FromRequestParts<Arc<AppState>> for Viewer {
     }
 }
 
+// Not every handler that requires operator-or-above access needs the
+// underlying Viewer (e.g. to attribute an audit-log entry), but some do,
+// so it's carried here rather than discarded like a unit-struct marker.
+#[allow(dead_code)]
 pub struct Operator(pub Viewer);
 
 #[async_trait]

@@ -1,6 +1,7 @@
 mod accounts;
 mod auth;
 mod db;
+mod deployment;
 mod devices;
 mod enrollment;
 mod error;
@@ -31,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(accounts::router())
         .merge(enrollment::router())
         .merge(devices::router())
+        .merge(deployment::router())
         .with_state(state);
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());

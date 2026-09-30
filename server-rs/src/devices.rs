@@ -702,7 +702,7 @@ async fn next_job(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Res
         .execute(&mut *tx)
         .await?;
     queue_scheduled_scan(&mut tx, &device_row).await?;
-    // queue_scheduled_patch (deployment.py) lands in the next increment.
+    crate::deployment::queue_scheduled_patch(&mut tx, &device_row).await?;
 
     let job = sqlx::query_as::<_, JobRow>(
         "SELECT id, device_id, type, status, options, created_at, claimed_at, completed_at, exit_code, output, error \
