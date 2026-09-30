@@ -271,7 +271,7 @@ fn origin_is_trusted(headers: &HeaderMap) -> bool {
     if origin.is_empty() || host.is_empty() {
         return false;
     }
-    let origin_host = origin.splitn(2, "://").nth(1).unwrap_or(origin);
+    let origin_host = origin.split_once("://").map(|(_, rest)| rest).unwrap_or(origin);
     origin_host == host
 }
 
