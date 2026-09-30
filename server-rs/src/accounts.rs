@@ -1,6 +1,6 @@
 //! Mirrors server/app/accounts.py in full: setup/login/me/logout, password
 //! change, and admin user management + the recent-audit-log endpoint.
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
@@ -249,11 +249,12 @@ fn valid_username(username: &str) -> bool {
 async fn setup(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
     Json(payload): Json<SetupPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_browser_write(&headers)?;
-    let peer = client_ip(&headers);
+    let peer = client_ip(&headers, peer_addr.ip());
     throttle(&state, &peer, "setup").await?;
 
     if payload.username.is_empty() || payload.password.len() < 12 || payload.password.len() > 128 {
@@ -314,11 +315,12 @@ struct LoginPayload {
 async fn login(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
     Json(payload): Json<LoginPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_browser_write(&headers)?;
-    let peer = client_ip(&headers);
+    let peer = client_ip(&headers, peer_addr.ip());
     let username = payload.username.to_lowercase();
     throttle(&state, &peer, &username).await?;
 
@@ -387,18 +389,29 @@ async fn fetch_user_by_id(state: &AppState, id: &str) -> Result<crate::models::U
     .map_err(ApiError::from)
 }
 
-/// No `TRUSTED_PROXY_COUNT`-based real-IP resolution yet (see
-/// deployment.py's equivalent in the Python server, ported alongside the
-/// rest of that file) -- this is only used to key throttling, and a wrong
-/// value there only affects a rate limit, not authorization.
-fn client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .unwrap_or("unknown")
-        .trim()
-        .to_string()
+/// Mirrors uvicorn's `--forwarded-allow-ips` trust model (see
+/// docker-compose.yml's `command:` for the Python server): X-Forwarded-For
+/// is honored only when the request's actual TCP peer is itself a trusted
+/// proxy (Caddy, or localhost), so an external client can't simply forge
+/// the header to spoof a different throttle key and dodge the rate limit.
+/// Untrusted requests are keyed by their real socket address instead.
+fn client_ip(headers: &HeaderMap, peer: std::net::IpAddr) -> String {
+    if trusted_proxy_ips().contains(&peer) {
+        if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(candidate) = forwarded.split(',').next().map(str::trim).filter(|s| !s.is_empty()) {
+                return candidate.to_string();
+            }
+        }
+    }
+    peer.to_string()
+}
+
+fn trusted_proxy_ips() -> Vec<std::net::IpAddr> {
+    std::env::var("FORWARDED_ALLOW_IPS")
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -411,6 +424,7 @@ async fn change_password(
     State(state): State<Arc<AppState>>,
     current: CurrentUser,
     headers: HeaderMap,
+    ConnectInfo(peer_addr): ConnectInfo<std::net::SocketAddr>,
     jar: CookieJar,
     Json(payload): Json<ChangePasswordPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -418,7 +432,7 @@ async fn change_password(
     if payload.new_password.len() < 12 || payload.new_password.len() > 128 {
         return Err(ApiError::bad_request("New password must be at least 12 characters"));
     }
-    let peer = client_ip(&headers);
+    let peer = client_ip(&headers, peer_addr.ip());
     throttle(&state, &peer, &format!("password:{}", current.user.id)).await?;
 
     // Re-read under lock: the hash used above (from the extractor) could

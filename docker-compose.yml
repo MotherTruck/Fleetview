@@ -26,29 +26,28 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
       # Optional legacy shared token. Leave unset to accept only one-time per-device tokens.
       ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
-      TRUSTED_PROXY_COUNT: "0"
       METRICS_RETENTION_DAYS: "7"
       FLEETVIEW_COOKIE_SECURE: ${FLEETVIEW_COOKIE_SECURE:-false}
       # Required only if you configure a Proxmox/OPNsense integration (docs/INTEGRATIONS.md).
       FLEETVIEW_SECRET_KEY: ${FLEETVIEW_SECRET_KEY:-}
-    # --forwarded-allow-ips always includes the caddy service's static IP
-    # below so login-throttle-by-source-IP still works correctly when the
-    # tls profile is enabled (otherwise every request would appear to come
-    # from caddy's own IP once it's proxying). Harmless when caddy isn't
-    # running: that address is simply unused, and it's only reachable from
-    # other containers on the internal frontend network, never from outside.
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1,172.28.0.10"]
+      # Who X-Forwarded-For is trusted from for login-throttle-by-source-IP
+      # keying (see accounts.rs's client_ip): the loopback address a
+      # locally-run reverse proxy would connect from, plus the caddy
+      # service's static IP below so this still works correctly when the
+      # tls profile is enabled (otherwise every request would appear to
+      # come from caddy's own IP once it's proxying). Harmless when caddy
+      # isn't running: that address is simply unused, and it's only
+      # reachable from other containers on the internal frontend network,
+      # never from outside.
+      FORWARDED_ALLOW_IPS: "127.0.0.1,172.28.0.10"
     ports:
       - "${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}:${FLEETVIEW_PORT:-8080}:8080"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    # Uses the image's own HEALTHCHECK (server/Dockerfile) rather than
+    # redeclaring it here.
     networks:
       - frontend
       - backend

@@ -61,7 +61,10 @@ async fn main() -> anyhow::Result<()> {
     // that passing port 0 to get a free port -- as the integration test
     // harness does -- has a discoverable result.
     println!("listening on {}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
+    // Exposes each connection's real socket address to extractors (see
+    // accounts.rs's client_ip, which needs it to validate X-Forwarded-For
+    // only from a trusted proxy hop) via ConnectInfo<SocketAddr>.
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await?;
     Ok(())
 }
 

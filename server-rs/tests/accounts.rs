@@ -325,6 +325,51 @@ async fn disable_reset_and_last_admin() {
     assert!(audit.as_array().map(|a| !a.is_empty()).unwrap_or(false));
 }
 
+/// Regression test for a real gap found while preparing the Docker cutover
+/// (task #60): Python's uvicorn only trusts X-Forwarded-For from a request
+/// whose actual TCP peer is itself an allow-listed proxy (its own
+/// `--forwarded-allow-ips`); the Rust port originally trusted the header
+/// unconditionally from anyone, which would have let an external client
+/// spoof a fresh X-Forwarded-For value on every request to dodge the
+/// login-throttle-by-peer-IP rate limit entirely. Confirms the fix: from an
+/// untrusted peer, the header is ignored and the throttle keys off the real
+/// socket address instead.
+#[tokio::test]
+async fn spoofed_forwarded_for_is_ignored_from_an_untrusted_peer() {
+    // A CIDR that will never match the test client's real loopback peer,
+    // so 127.0.0.1 is untrusted here (opposite of the server's own default).
+    let server = TestServer::start_with_env(&[("FORWARDED_ALLOW_IPS", "203.0.113.1".to_string())]).await;
+    let client = server.client();
+
+    let spoofed_ip = "198.51.100.42"; // RFC 5737 documentation address
+    let response = client
+        .post(server.url("/api/v1/auth/login"))
+        .header(fv_header().0, fv_header().1)
+        .header("X-Forwarded-For", spoofed_ip)
+        .json(&json!({"username": "nobody", "password": "irrelevant-wrong-password"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+
+    let pool = server.pool().await;
+    let window = chrono::Utc::now().timestamp() / 900;
+    let real_key = sha256_hex(&format!("peer:127.0.0.1:{window}"));
+    let spoofed_key = sha256_hex(&format!("peer:{spoofed_ip}:{window}"));
+
+    let real_attempts: Option<i32> = sqlx::query_scalar("SELECT attempts FROM login_throttles WHERE key = $1").bind(&real_key).fetch_optional(&pool).await.unwrap();
+    let spoofed_attempts: Option<i32> =
+        sqlx::query_scalar("SELECT attempts FROM login_throttles WHERE key = $1").bind(&spoofed_key).fetch_optional(&pool).await.unwrap();
+
+    assert_eq!(real_attempts, Some(1), "the throttle must be keyed by the real peer address when it isn't a trusted proxy");
+    assert_eq!(spoofed_attempts, None, "the spoofed X-Forwarded-For value must never be used to key the throttle here");
+}
+
+fn sha256_hex(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
 #[tokio::test]
 async fn duplicate_username_and_role_validation() {
     let server = TestServer::start().await;

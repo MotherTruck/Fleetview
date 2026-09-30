@@ -3,3 +3,6 @@ dist/
 agent/bin/
 **/__pycache__/
 **/*.pyc
+.git/
+node_modules/
+server-rs/target/
