@@ -64,6 +64,46 @@ fn default_platform() -> String {
     "linux".to_string()
 }
 
+#[cfg(test)]
+mod token_status_tests {
+    //! Ports server/tests/test_enrollment_tokens.py's TokenStatusTests.
+    //! The Python suite also checks that naive (timezone-less) datetimes are
+    //! treated as UTC -- that bug class is structurally impossible here,
+    //! since chrono::DateTime<Utc> is always timezone-aware, so there's no
+    //! equivalent case to port.
+    use super::*;
+
+    fn now() -> DateTime<Utc> {
+        "2026-01-01T12:00:00Z".parse().unwrap()
+    }
+
+    #[test]
+    fn active() {
+        assert_eq!(token_status(None, None, now() + Duration::hours(1), now()), "active");
+    }
+
+    #[test]
+    fn expired_at_and_after_the_deadline() {
+        assert_eq!(token_status(None, None, now(), now()), "expired");
+        assert_eq!(token_status(None, None, now() - Duration::seconds(1), now()), "expired");
+    }
+
+    #[test]
+    fn revoked() {
+        assert_eq!(token_status(None, Some(now()), now() + Duration::hours(1), now()), "revoked");
+    }
+
+    #[test]
+    fn used_wins_over_everything() {
+        assert_eq!(token_status(Some(now()), Some(now()), now() - Duration::days(1), now()), "used");
+    }
+
+    #[test]
+    fn revoked_wins_over_expired() {
+        assert_eq!(token_status(None, Some(now()), now() - Duration::days(1), now()), "revoked");
+    }
+}
+
 async fn enroll(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<EnrollRequest>,

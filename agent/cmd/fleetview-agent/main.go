@@ -167,8 +167,15 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 			report, metricsErr := metricsCollector.Collect(settings.GPUMonitoringEnabled)
 			if metricsErr != nil {
 				logger.Printf("metrics collection failed: %v", metricsErr)
-			} else if metricsErr = api.ReportMetrics(ctx, report); metricsErr != nil {
-				logger.Printf("metrics report failed: %v", metricsErr)
+			} else {
+				// Mirrors the live WS metrics tick (internal/live/live.go):
+				// without this, TopConsumers stays a nil slice, which the
+				// server's JSON schema rejects as invalid (it requires a
+				// list, not null) -- every periodic report would 422.
+				report.TopConsumers = telemetry.TopConsumers(live.GatherConsumers(ctx, processSampler, dockerLiveEnabled.Load()), live.TopConsumersLimit)
+				if metricsErr = api.ReportMetrics(ctx, report); metricsErr != nil {
+					logger.Printf("metrics report failed: %v", metricsErr)
+				}
 			}
 		case <-jobTicker.C:
 			stagedUpgrade, err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled)

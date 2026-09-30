@@ -41,10 +41,12 @@ type wsMessage struct {
 	data    []byte
 }
 
-// topConsumersLimit bounds the merged process+container list sent with each
+// TopConsumersLimit bounds the merged process+container list sent with each
 // metrics tick (see telemetry.TopConsumers): up to this many by CPU and up
-// to this many by memory, deduplicated.
-const topConsumersLimit = 12
+// to this many by memory, deduplicated. Exported so the periodic HTTP
+// metrics report (cmd/fleetview-agent/main.go) can populate the same field
+// the same way, rather than leaving it unset.
+const TopConsumersLimit = 12
 
 const (
 	metricsInterval  = 2 * time.Second
@@ -115,11 +117,11 @@ func Run(ctx context.Context, api *client.Client, collector *telemetry.Collector
 	}
 }
 
-// gatherConsumers combines this tick's host-process sample with a Docker
+// GatherConsumers combines this tick's host-process sample with a Docker
 // container stats snapshot (when Docker inventory is enabled). Container
 // stats fetching is bounded to a few seconds so a hung Docker daemon can
 // never stall the metrics ticker beyond that.
-func gatherConsumers(ctx context.Context, processes *telemetry.ProcessSampler, dockerEnabled bool) []model.ResourceConsumer {
+func GatherConsumers(ctx context.Context, processes *telemetry.ProcessSampler, dockerEnabled bool) []model.ResourceConsumer {
 	all := processes.Sample()
 	if !dockerEnabled {
 		return all
@@ -223,7 +225,7 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 				if err != nil {
 					continue
 				}
-				report.TopConsumers = telemetry.TopConsumers(gatherConsumers(sessionCtx, processes, dockerEnabled.Load()), topConsumersLimit)
+				report.TopConsumers = telemetry.TopConsumers(GatherConsumers(sessionCtx, processes, dockerEnabled.Load()), TopConsumersLimit)
 				send(liveMetricsMessage{Type: "metrics", MetricsReport: report})
 			}
 		}
