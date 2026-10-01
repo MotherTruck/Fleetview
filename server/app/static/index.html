@@ -548,7 +548,11 @@ FLEETVIEW_PORT=8080</code></pre>
           <span id="filesStatus" class="panel-note">Not connected</span>
         </div>
         <p class="form-note">Browse this device's filesystem directly -- not a queued job. Only one file browser session can be open per device at a time, and it ends when you leave this tab. Every session is recorded in the account audit log.</p>
-        <p id="filesBreadcrumb" class="files-breadcrumb"></p>
+        <div class="files-toolbar">
+          <p id="filesBreadcrumb" class="files-breadcrumb"></p>
+          <button id="filesUploadButton" type="button" class="secondary">Upload</button>
+          <input id="filesUploadInput" type="file" hidden>
+        </div>
         <div class="table-wrap detail-table-wrap">
           <table>
             <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
@@ -574,6 +578,26 @@ FLEETVIEW_PORT=8080</code></pre>
         <p id="patchScheduleInfo" class="form-note">Approved patches are queued at the next agent check-in after the interval.</p>
       </div>
       <p id="detailFootnote" class="detail-footnote"></p>
+    </dialog>
+
+    <dialog id="filesEditDialog" class="device-dialog">
+      <form id="filesEditForm" class="files-edit-form">
+        <div class="detail-header">
+          <div>
+            <p class="eyebrow">FILE BROWSER</p>
+            <h2 id="filesEditPath">Edit file</h2>
+          </div>
+          <div class="detail-header-actions">
+            <button id="closeFilesEdit" type="button" class="icon-button secondary" aria-label="Close">×</button>
+          </div>
+        </div>
+        <p id="filesEditNote" class="form-note"></p>
+        <textarea id="filesEditContent" class="files-edit-textarea" spellcheck="false"></textarea>
+        <div class="dialog-actions">
+          <button id="cancelFilesEdit" type="button" class="secondary">Cancel</button>
+          <button id="saveFilesEdit" type="submit">Save</button>
+        </div>
+      </form>
     </dialog>
 
     <script src="/static/vendor/xterm/xterm.js" defer></script>

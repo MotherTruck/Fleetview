@@ -35,6 +35,8 @@ const state = {
   filesSocket: null,
   filesDeviceId: null,
   filesPath: "",
+  filesEditingPath: null,
+  filesEditingTruncated: false,
   topConsumersSort: "cpu_percent",
 };
 
@@ -270,7 +272,13 @@ function connectFiles(deviceId, path = "") {
           $("#filesStatus").textContent = "Live";
           renderFilesListing(message);
         } else if (message.type === "files_read_result") {
-          handleFileDownload(message);
+          if (state.filesEditingPath === message.path) {
+            openFilesEditorWithContent(message);
+          } else {
+            handleFileDownload(message);
+          }
+        } else if (message.type === "files_write_result") {
+          handleFilesWriteResult(message);
         } else if (message.type === "files_closed") {
           $("#filesStatus").textContent = `Session ended: ${message.reason || "closed"}`;
         } else if (message.type === "error") {
@@ -324,7 +332,8 @@ function renderFilesListing(message) {
       return `<tr data-files-dir="${escapeHtml(fullPath)}"><td class="package-name">📁 ${escapeHtml(entry.name)}</td><td>—</td><td>${escapeHtml(fullDate(entry.modified_at))}</td><td></td></tr>`;
     }
     return `<tr><td>${escapeHtml(entry.name)}</td><td>${formatBytes(entry.size)}</td><td>${escapeHtml(fullDate(entry.modified_at))}</td>` +
-      `<td><button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button></td></tr>`;
+      `<td><button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button> ` +
+      `<button type="button" class="secondary" data-files-edit="${escapeHtml(fullPath)}">Edit</button></td></tr>`;
   }).join("");
   $("#filesListing").innerHTML = rows || '<tr><td colspan="4" class="empty">Empty directory.</td></tr>';
   if (message.truncated) {
@@ -343,6 +352,65 @@ function handleFileDownload(message) {
   document.body.appendChild(link); link.click(); link.remove();
   URL.revokeObjectURL(url);
   if (message.truncated) showNotice(`${name} was larger than the 8 MiB limit; only the first part was downloaded.`, true);
+}
+
+// Editing reuses the same files_read/files_read_result round trip as
+// Download (see connectFiles's onMessage) -- state.filesEditingPath marks
+// the in-flight request as "open the editor with this" rather than
+// "download this", since the server can't tell the two apart itself.
+function openFilesEditor(path) {
+  state.filesEditingPath = path;
+  state.filesSocket?.send({ type: "read", path });
+}
+
+function openFilesEditorWithContent(message) {
+  state.filesEditingTruncated = Boolean(message.truncated);
+  if (message.error) { showNotice(message.error, true); state.filesEditingPath = null; return; }
+  $("#filesEditPath").textContent = message.path;
+  $("#filesEditNote").textContent = message.truncated
+    ? "This file is larger than the 8 MiB limit -- only the first part loaded, so saving is disabled to avoid truncating it."
+    : "Saving overwrites the file on the device directly.";
+  $("#saveFilesEdit").disabled = message.truncated;
+  let text;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(base64ToBytes(message.data || "")); }
+  catch { text = null; }
+  if (text === null) {
+    $("#filesEditContent").value = "";
+    $("#filesEditNote").textContent = "This doesn't look like a text file (not valid UTF-8); editing isn't supported.";
+    $("#saveFilesEdit").disabled = true;
+  } else {
+    $("#filesEditContent").value = text;
+  }
+  $("#filesEditDialog").showModal();
+}
+
+function closeFilesEditor() {
+  state.filesEditingPath = null;
+  $("#filesEditDialog").close();
+  $("#filesEditContent").value = "";
+}
+
+function handleFilesWriteResult(message) {
+  if (message.error) { showNotice(message.error, true); return; }
+  showNotice(`Saved ${message.path}.`);
+  if (state.filesEditingPath === message.path) closeFilesEditor();
+  requestFilesList(state.filesPath);
+}
+
+function uploadFileToCurrentDirectory(file) {
+  const separator = state.filesPath.includes("\\") && !state.filesPath.includes("/") ? "\\" : "/";
+  const base = state.filesPath.endsWith(separator) ? state.filesPath : `${state.filesPath}${separator}`;
+  const destination = `${base}${file.name}`;
+  const existing = Array.from($("#filesListing").querySelectorAll("[data-files-download]"))
+    .some(button => button.dataset.filesDownload === destination);
+  if (existing && !confirm(`${file.name} already exists in this directory. Overwrite it?`)) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const bytes = new Uint8Array(reader.result);
+    state.filesSocket?.send({ type: "write", path: destination, data: bytesToBase64(bytes) });
+  };
+  reader.onerror = () => showNotice("Could not read the selected file.", true);
+  reader.readAsArrayBuffer(file);
 }
 
 function escapeHtml(value = "") {
@@ -2362,8 +2430,27 @@ $("#detailFiles").addEventListener("click", (event) => {
   const dir = event.target.closest("[data-files-dir]");
   if (dir) { requestFilesList(dir.dataset.filesDir); return; }
   const download = event.target.closest("[data-files-download]");
-  if (download) { state.filesSocket?.send({ type: "read", path: download.dataset.filesDownload }); }
+  if (download) { state.filesEditingPath = null; state.filesSocket?.send({ type: "read", path: download.dataset.filesDownload }); return; }
+  const edit = event.target.closest("[data-files-edit]");
+  if (edit) { openFilesEditor(edit.dataset.filesEdit); }
 });
+
+$("#filesUploadButton").addEventListener("click", () => $("#filesUploadInput").click());
+$("#filesUploadInput").addEventListener("change", () => {
+  const file = $("#filesUploadInput").files[0];
+  if (file) uploadFileToCurrentDirectory(file);
+  $("#filesUploadInput").value = "";
+});
+
+$("#filesEditForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if ($("#saveFilesEdit").disabled || !state.filesEditingPath) return;
+  const bytes = new TextEncoder().encode($("#filesEditContent").value);
+  state.filesSocket?.send({ type: "write", path: state.filesEditingPath, data: bytesToBase64(bytes) });
+});
+$("#closeFilesEdit").addEventListener("click", closeFilesEditor);
+$("#cancelFilesEdit").addEventListener("click", closeFilesEditor);
+$("#filesEditDialog").addEventListener("close", () => { state.filesEditingPath = null; });
 
 $("#deviceDialog").addEventListener("click", async (event) => {
   const button = event.target.closest("#wakeDeviceButton");

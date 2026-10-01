@@ -53,6 +53,14 @@ type filesReadResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+type filesWriteResult struct {
+	Type    string `json:"type"`
+	Session string `json:"session"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 // maxListEntries caps a single directory listing so a pathological
 // directory (e.g. a huge cache or /proc) can't blow up the live channel's
 // write queue or the dashboard's rendering.
@@ -139,6 +147,43 @@ func (f *filesHandler) read(session, path string) {
 		Size:      int64(len(data)),
 		Truncated: truncated,
 	})
+}
+
+// write backs both "upload a new file" and "save an edited file" -- the
+// dashboard distinguishes those in its own UI, but to the agent they're the
+// same operation: decode and write bytes to a path, creating the file if it
+// doesn't exist. Unlike read's "truncate and still return what fits",
+// an oversized write is rejected outright rather than silently writing a
+// corrupt partial file.
+func (f *filesHandler) write(session, path, dataB64 string) {
+	if path == "" {
+		f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Error: "no path given"})
+		return
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Error: "is a directory"})
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Error: "invalid upload data"})
+		return
+	}
+	if len(data) > maxReadBytes {
+		f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Error: "file exceeds the 8 MiB limit"})
+		return
+	}
+	// Preserve an existing file's mode (e.g. a script's executable bit)
+	// rather than clobbering it with a fixed default.
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
+		f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Error: err.Error()})
+		return
+	}
+	f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Size: int64(len(data))})
 }
 
 // defaultRoot is used when the dashboard asks for an empty path (the

@@ -49,9 +49,14 @@ type wsMessage struct {
 const TopConsumersLimit = 12
 
 const (
-	metricsInterval  = 2 * time.Second
-	writeQueueSize   = 32
-	maxTerminalFrame = 64 * 1024
+	metricsInterval = 2 * time.Second
+	writeQueueSize  = 32
+	// Shared cap for every inbound control-message frame (terminal input,
+	// remote-control events, file list/read/write requests). Sized for the
+	// largest of these -- a files_write upload payload, base64-encoded (see
+	// files.go's maxReadBytes) -- plus room for its JSON envelope, not just
+	// terminal keystrokes.
+	maxTerminalFrame = 12 * 1024 * 1024
 	minStableUp      = 10 * time.Second
 )
 
@@ -159,6 +164,10 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.CloseNow()
+	// nhooyr.io/websocket defaults to a 32KiB read limit, which would
+	// reject a files_write upload frame (see maxTerminalFrame) before our
+	// own size check ever runs. Match the two.
+	conn.SetReadLimit(maxTerminalFrame)
 
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -284,6 +293,8 @@ func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, 
 			go files.list(message.Session, message.Path)
 		case "files_read":
 			go files.read(message.Session, message.Path)
+		case "files_write":
+			go files.write(message.Session, message.Path, message.Data)
 		}
 	}
 }

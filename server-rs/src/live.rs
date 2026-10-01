@@ -33,7 +33,12 @@ use crate::models::{Device, User};
 use crate::security::token_hash;
 use crate::AppState;
 
-pub const MAX_TERMINAL_MESSAGE: usize = 64 * 1024;
+// Shared cap for every inbound browser control-message frame (terminal
+// input, remote-control events, file list/read/write requests). Sized for
+// the largest of these -- a files_write upload payload, base64-encoded (see
+// agent/internal/live/files.go's maxReadBytes) -- plus room for its JSON
+// envelope, not just terminal keystrokes.
+pub const MAX_TERMINAL_MESSAGE: usize = 12 * 1024 * 1024;
 
 #[derive(Clone)]
 enum OutMsg {
@@ -446,7 +451,7 @@ async fn handle_agent_live(mut socket: WebSocket, state: Arc<AppState>, headers:
                             state.hub.send_to_screen_viewer(&device.id, session, message.clone());
                         }
                     }
-                    "files_list_result" | "files_read_result" => {
+                    "files_list_result" | "files_read_result" | "files_write_result" => {
                         if let Some(session) = message.get("session").and_then(Value::as_str) {
                             state.hub.send_to_files_viewer(&device.id, session, message.clone());
                         }
@@ -821,6 +826,13 @@ async fn handle_browser_files_live(mut socket: WebSocket, state: Arc<AppState>, 
                     "read" => {
                         if !path.is_empty() {
                             state.hub.send_to_agent(&device_id, json!({"type": "files_read", "session": session_id, "path": path}));
+                        }
+                    }
+                    "write" => {
+                        let data = message.get("data").and_then(Value::as_str).unwrap_or("");
+                        if !path.is_empty() && !data.is_empty() {
+                            record_audit(&state, &user.username, "files_write", &device.hostname, path).await;
+                            state.hub.send_to_agent(&device_id, json!({"type": "files_write", "session": session_id, "path": path, "data": data}));
                         }
                     }
                     _ => {}
