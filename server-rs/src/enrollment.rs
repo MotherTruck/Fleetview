@@ -140,8 +140,9 @@ async fn enroll(
     let agent_token = new_agent_token();
     let device_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO devices (id, hostname, platform, agent_version, agent_token_hash) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO devices (id, hostname, platform, agent_version, agent_token_hash, \
+         enrolled_at, last_seen, inventory, installed_packages, available_updates) \
+         VALUES ($1, $2, $3, $4, $5, now(), now(), '{}', '[]', '[]')",
     )
     .bind(&device_id)
     .bind(&payload.hostname)

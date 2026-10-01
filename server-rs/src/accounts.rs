@@ -127,7 +127,7 @@ async fn throttle(state: &AppState, peer: &str, username: &str) -> Result<(), Ap
 }
 
 async fn audit(state: &AppState, actor: &str, action: &str, target: &str, details: &str) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, $2, $3, $4, now())")
         .bind(actor)
         .bind(action)
         .bind(target)
@@ -285,8 +285,8 @@ async fn setup(
     }
     let user_id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO users (id, username, password_hash, role, active, must_change_password) \
-         VALUES ($1, $2, $3, 'admin', true, false)",
+        "INSERT INTO users (id, username, password_hash, role, active, must_change_password, created_at) \
+         VALUES ($1, $2, $3, 'admin', true, false, now())",
     )
     .bind(&user_id)
     .bind(&username)
@@ -459,7 +459,7 @@ async fn change_password(
         .bind(&current.user.id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'password_changed', $1, '')")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'password_changed', $1, '', now())")
         .bind(&current.user.username)
         .execute(&mut *tx)
         .await?;
@@ -531,8 +531,8 @@ async fn create_user(
 
     let user_id = Uuid::new_v4().to_string();
     let inserted = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, role, active, must_change_password) \
-         VALUES ($1, $2, $3, $4, true, true) ON CONFLICT (username) DO NOTHING",
+        "INSERT INTO users (id, username, password_hash, role, active, must_change_password, created_at) \
+         VALUES ($1, $2, $3, $4, true, true, now()) ON CONFLICT (username) DO NOTHING",
     )
     .bind(&user_id)
     .bind(&username)
@@ -543,7 +543,7 @@ async fn create_user(
     if inserted.rows_affected() == 0 {
         return Err(ApiError::conflict("Username already exists"));
     }
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'user_created', $2, $3)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'user_created', $2, $3, now())")
         .bind(&actor.username)
         .bind(&username)
         .bind(format!("role={}", payload.role))
@@ -638,7 +638,7 @@ async fn edit_user(
         .bind(&user_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'user_updated', $2, $3)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'user_updated', $2, $3, now())")
         .bind(&actor.username)
         .bind(&target_username)
         .bind(format!(

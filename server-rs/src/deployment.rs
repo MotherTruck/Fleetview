@@ -300,12 +300,7 @@ pub async fn queue_scheduled_patch(tx: &mut sqlx::PgConnection, device: &Device)
         "updates": selected.iter().map(|(n, v, _, _)| json!({"package": n, "version": v})).collect::<Vec<_>>(),
         "scheduled": true,
     });
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'INSTALL_APPROVED_UPDATES', $3)")
-        .bind(Uuid::new_v4().to_string())
-        .bind(&device.id)
-        .bind(options)
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &Uuid::new_v4().to_string(), &device.id, "INSTALL_APPROVED_UPDATES", options).await?;
     Ok(())
 }
 
@@ -366,8 +361,8 @@ async fn set_approval(
         }
     }
     sqlx::query(
-        "INSERT INTO patch_approvals (device_id, package_key, available_version, approved) VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (device_id, package_key, available_version) DO UPDATE SET approved = $4",
+        "INSERT INTO patch_approvals (device_id, package_key, available_version, approved, updated_at) VALUES ($1, $2, $3, $4, now()) \
+         ON CONFLICT (device_id, package_key, available_version) DO UPDATE SET approved = $4, updated_at = now()",
     )
     .bind(&id)
     .bind(&payload.package)
@@ -439,12 +434,7 @@ async fn deploy_approved(
     }
     let updates = approved_snapshot(&state, &device).await?;
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'INSTALL_APPROVED_UPDATES', $3)")
-        .bind(&job_id)
-        .bind(&id)
-        .bind(json!({ "updates": updates }))
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &job_id, &id, "INSTALL_APPROVED_UPDATES", json!({ "updates": updates })).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": job_id, "updates": updates }))))
 }
@@ -636,7 +626,7 @@ async fn upload_bundle(
 
     let package_id = Uuid::new_v4().to_string();
     let mut tx = state.db.begin().await?;
-    sqlx::query("INSERT INTO custom_packages (id, name, platform, command) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO custom_packages (id, name, platform, command, created_at) VALUES ($1, $2, $3, $4, now())")
         .bind(&package_id)
         .bind(&name)
         .bind(&platform)
@@ -658,7 +648,7 @@ async fn upload_bundle(
         .await?;
     }
     let actor = admin.0.user().map(|u| u.username.as_str()).unwrap_or("bootstrap");
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'custom_package_created', $2, $3)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'custom_package_created', $2, $3, now())")
         .bind(actor)
         .bind(&name)
         .bind(format!("{platform}, {} file(s)", files.len()))
@@ -721,12 +711,7 @@ async fn deploy_bundle(
     }
     let package_name: String = package.get("name");
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'INSTALL_CUSTOM_PACKAGE', $3)")
-        .bind(&job_id)
-        .bind(&device_id)
-        .bind(json!({ "package_id": package_id, "name": package_name }))
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &job_id, &device_id, "INSTALL_CUSTOM_PACKAGE", json!({ "package_id": package_id, "name": package_name })).await?;
     tx.commit().await?;
     Ok((
         StatusCode::CREATED,
@@ -820,17 +805,12 @@ async fn run_command(
     }
     let job_id = Uuid::new_v4().to_string();
     let mut tx = state.db.begin().await?;
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'RUN_COMMAND', $3)")
-        .bind(&job_id)
-        .bind(&id)
-        .bind(json!({ "command": payload.command, "confirmed": true }))
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &job_id, &id, "RUN_COMMAND", json!({ "command": payload.command, "confirmed": true })).await?;
     let actor = admin.0.user().map(|u| u.username.as_str()).unwrap_or("bootstrap");
     // AccountAudit.details is VARCHAR(255); truncate, or Postgres rejects
     // the insert outright for any command longer than that.
     let details: String = payload.command.chars().take(255).collect();
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, 'run_command', $2, $3)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'run_command', $2, $3, now())")
         .bind(actor)
         .bind(&device.hostname)
         .bind(details)
@@ -892,12 +872,7 @@ async fn run_network_diagnostic(
         return Err(ApiError::conflict("Upgrade this device's existing agent to 0.20.0 first"));
     }
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'NETWORK_DIAGNOSTIC', $3)")
-        .bind(&job_id)
-        .bind(&id)
-        .bind(json!({ "tool": payload.tool, "target": payload.target, "port": payload.port }))
-        .execute(&state.db)
-        .await?;
+    crate::models::insert_job(&state.db, &job_id, &id, "NETWORK_DIAGNOSTIC", json!({ "tool": payload.tool, "target": payload.target, "port": payload.port })).await?;
     Ok((StatusCode::CREATED, Json(json!({ "id": job_id, "device_id": id }))))
 }
 
@@ -937,12 +912,7 @@ async fn wake_device(
         return Err(ApiError::conflict("The relay device's agent must be 0.20.0 or later"));
     }
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'WAKE_ON_LAN', $3)")
-        .bind(&job_id)
-        .bind(&relay.id)
-        .bind(json!({ "mac": mac, "target_device_id": device.id }))
-        .execute(&state.db)
-        .await?;
+    crate::models::insert_job(&state.db, &job_id, &relay.id, "WAKE_ON_LAN", json!({ "mac": mac, "target_device_id": device.id })).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({ "id": job_id, "relay_device_id": relay.id, "mac": mac })),
@@ -1005,16 +975,11 @@ async fn upgrade_agent(
         return Err(ApiError::conflict(format!("No published agent binary for {platform_key}")));
     };
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'UPGRADE_AGENT', $3)")
-        .bind(&job_id)
-        .bind(&id)
-        .bind(json!({
-            "version": manifest_version,
-            "sha256": asset.get("sha256"),
-            "url": asset.get("path"),
-        }))
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &job_id, &id, "UPGRADE_AGENT", json!({
+        "version": manifest_version,
+        "sha256": asset.get("sha256"),
+        "url": asset.get("path"),
+    })).await?;
     tx.commit().await?;
     Ok((
         StatusCode::CREATED,

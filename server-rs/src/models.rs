@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
 
+/// Every job-queuing call site used to omit `status`/`created_at`, relying
+/// on 0001_init.sql's column defaults ('pending', now()) -- which matches a
+/// fresh sqlx-migrated database, but not a production database whose schema
+/// was actually created by the original Python/Alembic migrations (those
+/// columns are NOT NULL there with no database-level default, so every
+/// omitted insert failed outright). Centralized here, explicit about both
+/// values, so no call site can silently regress to relying on a default
+/// that may not exist.
+pub async fn insert_job<'e, E>(
+    executor: E,
+    id: &str,
+    device_id: &str,
+    job_type: &str,
+    options: Value,
+) -> Result<(), sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
+        "INSERT INTO jobs (id, device_id, type, status, options, created_at) \
+         VALUES ($1, $2, $3, 'pending', $4, now())",
+    )
+    .bind(id)
+    .bind(device_id)
+    .bind(job_type)
+    .bind(options)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct User {
     pub id: String,

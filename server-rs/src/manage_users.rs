@@ -47,7 +47,7 @@ pub async fn run(pool: &PgPool, username: &str) -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM user_sessions WHERE user_id = $1").bind(&user_id).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO account_audit (actor, action, target) VALUES ('local-console', 'admin_recovered', $1)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ('local-console', 'admin_recovered', $1, '', now())")
         .bind(&username)
         .execute(&mut *tx)
         .await?;

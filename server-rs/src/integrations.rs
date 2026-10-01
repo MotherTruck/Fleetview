@@ -134,7 +134,7 @@ async fn fetch_integration(db: &PgPool, id: &str) -> Result<Integration, ApiErro
 }
 
 async fn audit(db: &PgPool, actor: &str, action: &str, target: &str, details: &str) -> Result<(), ApiError> {
-    sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, $2, $3, $4, now())")
         .bind(actor)
         .bind(action)
         .bind(target)
@@ -230,8 +230,8 @@ async fn create_integration(
 
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO integrations (id, kind, name, base_url, verify_tls, encrypted_credentials) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO integrations (id, kind, name, base_url, verify_tls, encrypted_credentials, created_at, updated_at, cached_data) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now(), '{}')",
     )
     .bind(&id)
     .bind(&payload.kind)

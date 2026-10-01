@@ -185,8 +185,8 @@ async fn create_package(
     payload.validate()?;
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO packages (id, name, description, version, category, pacman_name, apt_name, winget_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO packages (id, name, description, version, category, pacman_name, apt_name, winget_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())",
     )
     .bind(&id)
     .bind(&payload.name)

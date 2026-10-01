@@ -320,7 +320,7 @@ async fn authenticate_session_user(state: &AppState, cookie: &str) -> Option<Use
 }
 
 async fn record_audit(state: &AppState, actor: &str, action: &str, target: &str, details: &str) {
-    let _ = sqlx::query("INSERT INTO account_audit (actor, action, target, details) VALUES ($1, $2, $3, $4)")
+    let _ = sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, $2, $3, $4, now())")
         .bind(actor)
         .bind(action)
         .bind(target)

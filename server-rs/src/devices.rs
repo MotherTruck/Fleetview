@@ -172,7 +172,8 @@ async fn get_fleet_settings(state: &AppState) -> Result<FleetSettings, ApiError>
     // the loser's INSERT hits the primary key and falls back to a plain
     // read instead of erroring, since by then the winner's row exists.
     sqlx::query(
-        "INSERT INTO fleet_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO fleet_settings (id, default_metrics_interval_seconds, default_inventory_interval_seconds, updated_at) \
+         VALUES (1, 60, 900, now()) ON CONFLICT (id) DO NOTHING",
     )
     .execute(&state.db)
     .await?;
@@ -348,8 +349,8 @@ async fn record_compliance_snapshot(
     sqlx::query(
         "INSERT INTO compliance_snapshots \
          (device_id, snapshot_date, update_count, security_update_count, vulnerability_count, \
-          critical_vulnerability_count, high_vulnerability_count, online) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+          critical_vulnerability_count, high_vulnerability_count, online, recorded_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())",
     )
     .bind(&device.id)
     .bind(&today)
@@ -406,12 +407,7 @@ async fn queue_scheduled_scan(tx: &mut sqlx::PgConnection, device: &Device) -> R
     .fetch_optional(&mut *tx)
     .await?;
     if active.is_none() {
-        sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, 'SCAN_VULNERABILITIES', $3)")
-            .bind(Uuid::new_v4().to_string())
-            .bind(&device.id)
-            .bind(json!({"scheduled": true}))
-            .execute(&mut *tx)
-            .await?;
+        crate::models::insert_job(&mut *tx, &Uuid::new_v4().to_string(), &device.id, "SCAN_VULNERABILITIES", json!({"scheduled": true})).await?;
     }
     Ok(())
 }
@@ -1076,9 +1072,9 @@ async fn update_fleet_settings(
         return Err(ApiError::bad_request("Interval out of range"));
     }
     sqlx::query(
-        "INSERT INTO fleet_settings (id, default_metrics_interval_seconds, default_inventory_interval_seconds) \
-         VALUES (1, $1, $2) \
-         ON CONFLICT (id) DO UPDATE SET default_metrics_interval_seconds = $1, default_inventory_interval_seconds = $2",
+        "INSERT INTO fleet_settings (id, default_metrics_interval_seconds, default_inventory_interval_seconds, updated_at) \
+         VALUES (1, $1, $2, now()) \
+         ON CONFLICT (id) DO UPDATE SET default_metrics_interval_seconds = $1, default_inventory_interval_seconds = $2, updated_at = now()",
     )
     .bind(payload.default_metrics_interval_seconds)
     .bind(payload.default_inventory_interval_seconds)
@@ -1242,13 +1238,7 @@ async fn create_job(
     }
 
     let job_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO jobs (id, device_id, type, options) VALUES ($1, $2, $3, $4)")
-        .bind(&job_id)
-        .bind(&device_id)
-        .bind(&payload.job_type)
-        .bind(Value::Object(payload.options))
-        .execute(&mut *tx)
-        .await?;
+    crate::models::insert_job(&mut *tx, &job_id, &device_id, &payload.job_type, Value::Object(payload.options)).await?;
     let job = sqlx::query_as::<_, JobRow>(
         "SELECT id, device_id, type, status, options, created_at, claimed_at, completed_at, exit_code, output, error \
          FROM jobs WHERE id = $1",
