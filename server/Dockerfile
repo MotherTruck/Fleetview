@@ -30,7 +30,14 @@ RUN set -e; \
     tar czf /out/agent-source.tar.gz agent scripts; \
     sha256sum /out/agent-source.tar.gz | cut -d' ' -f1 > /out/agent-source.sha256
 
-FROM rust:1.83-bookworm AS server-build
+# Pinned to the exact toolchain this Cargo.lock has actually been built
+# and tested with throughout development (rustc --version). A number of
+# transitive dependencies (e.g. time-core) require Cargo's edition2024
+# feature, stabilized in 1.85 -- the previous 1.83 pin failed to parse
+# those manifests at all, which is why every CI image build since the
+# Rust cutover silently failed and ghcr.io kept serving the last
+# successfully-published (pre-Rust) image.
+FROM rust:1.94-bookworm AS server-build
 WORKDIR /src
 COPY server-rs ./server-rs
 RUN cd server-rs && cargo build --release --locked
