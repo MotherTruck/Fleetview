@@ -514,6 +514,7 @@ FLEETVIEW_PORT=8080</code></pre>
           <button id="dockerContainersTab" class="tab" data-detail-tab="docker" role="tab" hidden>Docker Containers</button>
           <button id="terminalTab" class="tab" data-detail-tab="terminal" role="tab" hidden>Terminal</button>
           <button id="screenTab" class="tab" data-detail-tab="screen" hidden title="Opens in a new window">Remote control ↗</button>
+          <button id="filesTab" class="tab" data-detail-tab="files" role="tab" hidden>Files</button>
         </div>
         <input id="detailSearch" type="search" placeholder="Search results" aria-label="Search device data">
       </div>
@@ -540,6 +541,20 @@ FLEETVIEW_PORT=8080</code></pre>
         </div>
         <p class="form-note">A real interactive shell on this device, streamed directly to your browser -- not a queued job. Only one terminal session can be open per device at a time, and it ends when this tab closes. Every session is recorded in the account audit log.</p>
         <div id="terminalContainer" class="terminal-container"></div>
+      </div>
+      <div id="detailFiles" class="detail-terminal" hidden>
+        <div class="terminal-heading">
+          <div><p class="eyebrow">DIAGNOSTICS</p><h3>File browser</h3></div>
+          <span id="filesStatus" class="panel-note">Not connected</span>
+        </div>
+        <p class="form-note">Browse this device's filesystem directly -- not a queued job. Only one file browser session can be open per device at a time, and it ends when you leave this tab. Every session is recorded in the account audit log.</p>
+        <p id="filesBreadcrumb" class="files-breadcrumb"></p>
+        <div class="table-wrap detail-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+            <tbody id="filesListing"></tbody>
+          </table>
+        </div>
       </div>
       <p id="detailTableSummary" class="table-summary"></p>
       <div id="detailTableWrap" class="table-wrap detail-table-wrap">

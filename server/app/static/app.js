@@ -32,6 +32,9 @@ const state = {
   liveMetricsByDevice: new Map(),
   terminalSocket: null,
   terminalDeviceId: null,
+  filesSocket: null,
+  filesDeviceId: null,
+  filesPath: "",
   topConsumersSort: "cpu_percent",
 };
 
@@ -246,6 +249,102 @@ function disconnectTerminal() {
   state.xtermFit = null;
 }
 
+// A live, on-demand view of this device's filesystem -- not a queued job,
+// same one-session-per-device model as the terminal (see live.rs's
+// claim_files). Unlike the terminal, there's nothing to keep "running"
+// between requests: each directory the admin clicks into is a fresh
+// "list" request, and the agent has no per-session state to lose, so a
+// reconnect for the same device is harmless (unlike connectTerminal, which
+// deliberately refuses to reconnect a dead session).
+function connectFiles(deviceId, path = "") {
+  if (state.filesDeviceId !== deviceId || !state.filesSocket) {
+    disconnectFiles();
+    state.filesDeviceId = deviceId;
+    $("#filesStatus").textContent = "Connecting…";
+    const socket = connectLiveSocket(`/api/v1/admin/devices/${deviceId}/files-live`, {
+      shouldReconnect: () => false,
+      onOpen: () => { $("#filesStatus").textContent = "Connected"; requestFilesList(path); },
+      onClose: () => { $("#filesStatus").textContent = "Disconnected"; },
+      onMessage: (message) => {
+        if (message.type === "files_list_result") {
+          $("#filesStatus").textContent = "Live";
+          renderFilesListing(message);
+        } else if (message.type === "files_read_result") {
+          handleFileDownload(message);
+        } else if (message.type === "files_closed") {
+          $("#filesStatus").textContent = `Session ended: ${message.reason || "closed"}`;
+        } else if (message.type === "error") {
+          $("#filesStatus").textContent = `Error: ${message.reason || "rejected"}`;
+        }
+      },
+    });
+    state.filesSocket = socket;
+  } else {
+    requestFilesList(path);
+  }
+}
+
+function requestFilesList(path) {
+  state.filesPath = path;
+  $("#filesListing").innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
+  state.filesSocket?.send({ type: "list", path });
+}
+
+function disconnectFiles() {
+  state.filesSocket?.close();
+  state.filesSocket = null;
+  state.filesDeviceId = null;
+  state.filesPath = "";
+}
+
+function filesParentPath(path, separator) {
+  const trimmed = path.replace(new RegExp(`\\${separator}+$`), "");
+  const idx = trimmed.lastIndexOf(separator);
+  if (idx <= 0) return separator === "\\" ? trimmed.slice(0, 3) : "/";
+  return trimmed.slice(0, idx) || separator;
+}
+
+function renderFilesListing(message) {
+  if (message.error) {
+    $("#filesListing").innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(message.error)}</td></tr>`;
+    $("#filesBreadcrumb").textContent = message.path || "";
+    return;
+  }
+  const path = message.path || "";
+  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  state.filesPath = path;
+  const parent = path.length > 1 ? filesParentPath(path, separator) : null;
+  $("#filesBreadcrumb").innerHTML = parent !== null
+    ? `<button type="button" data-files-up>↑ Up</button> · ${escapeHtml(path)}`
+    : escapeHtml(path);
+  const entries = message.entries || [];
+  const rows = entries.map((entry) => {
+    const fullPath = path.endsWith(separator) ? `${path}${entry.name}` : `${path}${separator}${entry.name}`;
+    if (entry.is_dir) {
+      return `<tr data-files-dir="${escapeHtml(fullPath)}"><td class="package-name">📁 ${escapeHtml(entry.name)}</td><td>—</td><td>${escapeHtml(fullDate(entry.modified_at))}</td><td></td></tr>`;
+    }
+    return `<tr><td>${escapeHtml(entry.name)}</td><td>${formatBytes(entry.size)}</td><td>${escapeHtml(fullDate(entry.modified_at))}</td>` +
+      `<td><button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button></td></tr>`;
+  }).join("");
+  $("#filesListing").innerHTML = rows || '<tr><td colspan="4" class="empty">Empty directory.</td></tr>';
+  if (message.truncated) {
+    $("#filesListing").insertAdjacentHTML("beforeend", `<tr><td colspan="4" class="empty">Showing the first entries only; this directory has more.</td></tr>`);
+  }
+}
+
+function handleFileDownload(message) {
+  if (message.error) { showNotice(message.error, true); return; }
+  const bytes = base64ToBytes(message.data || "");
+  const blob = new Blob([bytes]);
+  const name = message.path.split(/[\\/]/).pop() || "download";
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = name;
+  document.body.appendChild(link); link.click(); link.remove();
+  URL.revokeObjectURL(url);
+  if (message.truncated) showNotice(`${name} was larger than the 8 MiB limit; only the first part was downloaded.`, true);
+}
+
 function escapeHtml(value = "") {
   const node = document.createElement("div");
   node.textContent = String(value);
@@ -279,6 +378,7 @@ function endLocalSession() {
   disconnectLiveStatus();
   disconnectDeviceMetrics();
   disconnectTerminal();
+  disconnectFiles();
   applyPermissions();
 }
 
@@ -1575,6 +1675,9 @@ function renderDeviceDetails() {
   const screenVersionOk = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 23));
   const screenSupported = screenVersionOk && inventory.remote_control?.available === true;
   $("#screenTab").hidden = !screenSupported;
+  const filesSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 24));
+  $("#filesTab").hidden = !filesSupported;
+  if (!filesSupported && state.detailTab === "files") state.detailTab = "overview";
   const severities = device.vulnerability_severity_counts || {};
   $("#detailTitle").textContent = device.display_name || device.hostname;
   $("#detailSubtitle").textContent = [device.os_name, device.os_version, device.architecture].filter(Boolean).join(" · ");
@@ -1595,12 +1698,14 @@ function renderDeviceDetails() {
   const overview = state.detailTab === "overview";
   const monitoring = state.detailTab === "monitoring";
   const terminal = state.detailTab === "terminal";
+  const files = state.detailTab === "files";
   $("#detailOverview").hidden = !overview;
   $("#detailMonitoring").hidden = !monitoring;
   $("#detailTerminal").hidden = !terminal;
-  $("#detailSearch").hidden = overview || monitoring || terminal;
-  $("#detailTableSummary").hidden = overview || monitoring || terminal;
-  $("#detailTableWrap").hidden = overview || monitoring || terminal;
+  $("#detailFiles").hidden = !files;
+  $("#detailSearch").hidden = overview || monitoring || terminal || files;
+  $("#detailTableSummary").hidden = overview || monitoring || terminal || files;
+  $("#detailTableWrap").hidden = overview || monitoring || terminal || files;
   $("#patchControls").hidden = state.detailTab !== "patches";
   $("#detailFootnote").textContent = "";
   if (overview) {
@@ -1613,6 +1718,10 @@ function renderDeviceDetails() {
   }
   if (terminal) {
     connectTerminal(device.id);
+    return;
+  }
+  if (files) {
+    connectFiles(device.id);
     return;
   }
 
@@ -2192,7 +2301,7 @@ $("#authButton").addEventListener("click", async () => {
   } catch (error) { showNotice(error.message, true); }
 });
 $("#closeDeviceDialog").addEventListener("click", () => $("#deviceDialog").close());
-$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); });
+$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); disconnectFiles(); });
 $("#removeDeviceButton").addEventListener("click", async () => {
   const device = state.detailDevice;
   if (!device) return;
@@ -2244,6 +2353,16 @@ $("#deviceDialog").addEventListener("click", async (event) => {
     disconnectDeviceMetrics();
   }
   if (state.detailTab !== "terminal") disconnectTerminal();
+  if (state.detailTab !== "files") disconnectFiles();
+});
+
+$("#detailFiles").addEventListener("click", (event) => {
+  const up = event.target.closest("[data-files-up]");
+  if (up) { requestFilesList(filesParentPath(state.filesPath, state.filesPath.includes("\\") && !state.filesPath.includes("/") ? "\\" : "/")); return; }
+  const dir = event.target.closest("[data-files-dir]");
+  if (dir) { requestFilesList(dir.dataset.filesDir); return; }
+  const download = event.target.closest("[data-files-download]");
+  if (download) { state.filesSocket?.send({ type: "read", path: download.dataset.filesDownload }); }
 });
 
 $("#deviceDialog").addEventListener("click", async (event) => {

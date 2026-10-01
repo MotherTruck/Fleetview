@@ -51,6 +51,7 @@ struct HubState {
     status_viewers: HashMap<ViewerId, Tx>,
     terminal_viewers: HashMap<String, (ViewerId, Tx, String)>,
     screen_viewers: HashMap<String, (ViewerId, Tx, String)>,
+    files_viewers: HashMap<String, (ViewerId, Tx, String)>,
 }
 
 pub struct LiveHub {
@@ -78,14 +79,15 @@ impl LiveHub {
     }
 
     fn agent_disconnected(&self, device_id: &str, id: ViewerId) {
-        let (terminal_closed, screen_closed) = {
+        let (terminal_closed, screen_closed, files_closed) = {
             let mut state = self.state.lock().unwrap();
             if state.agents.get(device_id).map(|(vid, _)| *vid) == Some(id) {
                 state.agents.remove(device_id);
             }
             let terminal = state.terminal_viewers.remove(device_id);
             let screen = state.screen_viewers.remove(device_id);
-            (terminal, screen)
+            let files = state.files_viewers.remove(device_id);
+            (terminal, screen, files)
         };
         self.broadcast_status(device_id, false);
         if let Some((_, tx, session)) = terminal_closed {
@@ -93,6 +95,9 @@ impl LiveHub {
         }
         if let Some((_, tx, session)) = screen_closed {
             Self::send(&tx, json!({"type": "screen_closed", "session": session, "reason": "agent_disconnected"}));
+        }
+        if let Some((_, tx, session)) = files_closed {
+            Self::send(&tx, json!({"type": "files_closed", "session": session, "reason": "agent_disconnected"}));
         }
     }
 
@@ -215,6 +220,33 @@ impl LiveHub {
         }
     }
 
+    // -- file browser (single active viewer per device) --
+    fn claim_files(&self, device_id: &str, id: ViewerId, tx: Tx) -> Option<String> {
+        let mut state = self.state.lock().unwrap();
+        if state.files_viewers.contains_key(device_id) {
+            return None;
+        }
+        let session_id = Uuid::new_v4().simple().to_string();
+        state.files_viewers.insert(device_id.to_string(), (id, tx, session_id.clone()));
+        Some(session_id)
+    }
+
+    fn release_files(&self, device_id: &str, id: ViewerId) {
+        let mut state = self.state.lock().unwrap();
+        if state.files_viewers.get(device_id).map(|(vid, _, _)| *vid) == Some(id) {
+            state.files_viewers.remove(device_id);
+        }
+    }
+
+    fn send_to_files_viewer(&self, device_id: &str, session: &str, payload: Value) {
+        let tx = self.state.lock().unwrap().files_viewers.get(device_id).and_then(|(_, tx, s)| {
+            (s == session).then(|| tx.clone())
+        });
+        if let Some(tx) = tx {
+            Self::send(&tx, payload);
+        }
+    }
+
     fn send_to_agent(&self, device_id: &str, payload: Value) -> bool {
         let tx = self.state.lock().unwrap().agents.get(device_id).map(|(_, tx)| tx.clone());
         match tx {
@@ -231,6 +263,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/admin/devices/:id/metrics-live", get(browser_metrics_live))
         .route("/api/v1/admin/devices/:id/terminal-live", get(browser_terminal_live))
         .route("/api/v1/admin/devices/:id/screen-live", get(browser_screen_live))
+        .route("/api/v1/admin/devices/:id/files-live", get(browser_files_live))
 }
 
 /// A writer task owns the real WebSocket sink for a connection's whole
@@ -344,6 +377,9 @@ fn supports_live(device: &Device) -> bool {
 fn supports_remote_control(device: &Device) -> bool {
     version_at_least(device.agent_version.as_deref(), (0, 23))
 }
+fn supports_files(device: &Device) -> bool {
+    version_at_least(device.agent_version.as_deref(), (0, 24))
+}
 
 fn is_unit_fraction(value: Option<&Value>) -> Option<f64> {
     let value = value?;
@@ -408,6 +444,11 @@ async fn handle_agent_live(mut socket: WebSocket, state: Arc<AppState>, headers:
                     "screen_info" | "screen_closed" => {
                         if let Some(session) = message.get("session").and_then(Value::as_str) {
                             state.hub.send_to_screen_viewer(&device.id, session, message.clone());
+                        }
+                    }
+                    "files_list_result" | "files_read_result" => {
+                        if let Some(session) = message.get("session").and_then(Value::as_str) {
+                            state.hub.send_to_files_viewer(&device.id, session, message.clone());
                         }
                     }
                     _ => {}
@@ -702,4 +743,93 @@ async fn handle_browser_screen_live(mut socket: WebSocket, state: Arc<AppState>,
 
     state.hub.release_screen(&device_id, id);
     state.hub.send_to_agent(&device_id, json!({"type": "screen_stop", "session": session_id}));
+}
+
+// -- browser: file browser --
+//
+// Unlike terminal/screen, there's no agent-side resource to start or stop
+// here (see files.go's doc comment) -- each "list"/"read" request is just
+// forwarded to the agent as-is with this session's id, and its
+// files_list_result/files_read_result response is relayed back by
+// handle_agent_live above. The claim/release dance still exists purely to
+// keep the UX to one browser viewer per device at a time, matching
+// terminal/screen.
+
+async fn browser_files_live(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(device_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> axum::response::Response {
+    ws.on_upgrade(move |socket| handle_browser_files_live(socket, state, device_id, headers, jar))
+}
+
+async fn handle_browser_files_live(mut socket: WebSocket, state: Arc<AppState>, device_id: String, headers: HeaderMap, jar: CookieJar) {
+    if !origin_is_trusted(&headers) {
+        reject(&mut socket, 4403, "Origin not trusted").await;
+        return;
+    }
+    let cookie = jar.get(SESSION_COOKIE).map(|c| c.value().to_string()).unwrap_or_default();
+    let Some(user) = authenticate_session_user(&state, &cookie).await else {
+        reject(&mut socket, 4401, "Sign in to continue").await;
+        return;
+    };
+    if user.role != "admin" || user.must_change_password {
+        reject(&mut socket, 4403, "Admin access required").await;
+        return;
+    }
+    let Some(device) = lookup_device(&state, &device_id).await else {
+        reject(&mut socket, 4404, "Device not found").await;
+        return;
+    };
+    if !supports_files(&device) {
+        reject(&mut socket, 4409, "Upgrade this device's agent to 0.24.0 for the file browser").await;
+        return;
+    }
+    if !state.hub.is_agent_live(&device_id) {
+        reject(&mut socket, 4410, "Device is not currently connected").await;
+        return;
+    }
+
+    let id = state.hub.next_viewer_id();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let Some(session_id) = state.hub.claim_files(&device_id, id, tx.clone()) else {
+        reject(&mut socket, 4429, "A file browser session is already open for this device").await;
+        return;
+    };
+    let (sink, mut stream) = socket.split();
+    spawn_writer(sink, rx);
+
+    record_audit(&state, &user.username, "files_open", &device.hostname, &session_id).await;
+
+    while let Some(Ok(message)) = stream.next().await {
+        match message {
+            Message::Text(raw) => {
+                if raw.len() > MAX_TERMINAL_MESSAGE {
+                    continue;
+                }
+                let Ok(message) = serde_json::from_str::<Value>(&raw) else { continue };
+                let path = message.get("path").and_then(Value::as_str).unwrap_or("");
+                if path.len() > 4096 {
+                    continue;
+                }
+                match message.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "list" => {
+                        state.hub.send_to_agent(&device_id, json!({"type": "files_list", "session": session_id, "path": path}));
+                    }
+                    "read" => {
+                        if !path.is_empty() {
+                            state.hub.send_to_agent(&device_id, json!({"type": "files_read", "session": session_id, "path": path}));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    state.hub.release_files(&device_id, id);
 }

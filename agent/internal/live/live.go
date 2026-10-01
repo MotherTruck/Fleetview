@@ -83,6 +83,7 @@ type inboundMessage struct {
 	DeltaX  float64 `json:"dx"`
 	DeltaY  float64 `json:"dy"`
 	Key     string  `json:"key"`
+	Path    string  `json:"path"`
 }
 
 // Run dials the server's live endpoint and keeps it connected until ctx is
@@ -210,6 +211,7 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 	defer term.stop()
 	scr := &screenHandler{send: send, sendBinary: sendBinary, logger: logger}
 	defer scr.stop()
+	files := &filesHandler{send: send}
 
 	writeWG.Add(1)
 	go func() {
@@ -231,14 +233,14 @@ func runOnce(ctx context.Context, api *client.Client, collector *telemetry.Colle
 		}
 	}()
 
-	readErr := readLoop(sessionCtx, conn, term, scr)
+	readErr := readLoop(sessionCtx, conn, term, scr, files)
 	cancel()
 	close(writeCh)
 	writeWG.Wait()
 	return readErr
 }
 
-func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, scr *screenHandler) error {
+func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, scr *screenHandler, files *filesHandler) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -278,6 +280,10 @@ func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, 
 			scr.key(message.Session, message.Key, message.Pressed)
 		case "screen_stop":
 			scr.stopSession(message.Session)
+		case "files_list":
+			go files.list(message.Session, message.Path)
+		case "files_read":
+			go files.read(message.Session, message.Path)
 		}
 	}
 }
