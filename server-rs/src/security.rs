@@ -31,12 +31,20 @@ pub fn new_enrollment_token() -> String {
     format!("fv_{}", token_urlsafe(32))
 }
 
+/// Constant-time comparison that never branches on the inputs' lengths
+/// (unlike `subtle::ConstantTimeEq`'s own slice impl, which returns early on
+/// a length mismatch) -- matches Python's hmac.compare_digest, which folds
+/// the length check into the same accumulator instead of short-circuiting.
+/// The hashes this guards are always a fixed length in practice, so this
+/// mostly matters for secure_equal's correctness as a general-purpose
+/// helper rather than any real exploit against current callers.
 pub fn secure_equal(left: &str, right: &str) -> bool {
     let (a, b) = (left.as_bytes(), right.as_bytes());
-    if a.len() != b.len() {
-        return false;
+    let mut diff: u8 = (a.len() != b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
     }
-    a.ct_eq(b).into()
+    diff == 0
 }
 
 pub fn password_hash(value: &str) -> String {
