@@ -1565,11 +1565,15 @@ function renderDeviceDetails() {
   $("#terminalTab").hidden = !terminalSupported;
   if (!terminalSupported && state.detailTab === "terminal") state.detailTab = "overview";
   // Gated on the agent's version (matching the server's own
-  // supports_remote_control check): the tab always opens its own window
-  // (see the deviceDialog click handler below) rather than switching
-  // state.detailTab, and that window does its own availability/reason
-  // check, so there's no "unavailable" state to represent here.
-  const screenSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 23));
+  // supports_remote_control check) and the device's last-reported
+  // graphical-session availability: the tab opens its own window (see the
+  // deviceDialog click handler below) rather than switching
+  // state.detailTab. That window still does its own live availability/reason
+  // check (the inventory snapshot here can be briefly stale), so a session
+  // that ended moments ago still shows a clear reason there -- but the tab
+  // itself shouldn't invite a click when the last scan found no session.
+  const screenVersionOk = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 23));
+  const screenSupported = screenVersionOk && inventory.remote_control?.available === true;
   $("#screenTab").hidden = !screenSupported;
   const severities = device.vulnerability_severity_counts || {};
   $("#detailTitle").textContent = device.display_name || device.hostname;
