@@ -958,6 +958,12 @@ function renderInstallCommand() {
   const status = record ? record.status : (fresh ? "active" : null);
   const usable = status === "active" && new Date(fresh.expires_at) > new Date();
   const serverURL = $("#installServerURL").value.trim().replace(/\/$/, "");
+  const isHttps = /^https:\/\//i.test(serverURL);
+  $("#installCaFingerprintField").hidden = !isHttps;
+  // Only meaningful over HTTPS (it pins the CA fetched during the installer's
+  // bootstrap, see docs/TLS.md) -- stray colons/whitespace from however the
+  // admin copied it are harmless, both installers normalize it the same way.
+  const caFingerprint = isHttps ? $("#installCaFingerprint").value.trim() : "";
 
   if (windows) {
     const meta = $("#windowsInstallTokenMeta");
@@ -967,6 +973,7 @@ function renderInstallCommand() {
     meta.textContent = tokenMetaText(fresh, status);
     $("#windowsInstallCommand").textContent = usable
       ? `.\\scripts\\install-agent.ps1 -ServerUrl ${psQuote(serverURL)} -EnrollmentToken ${psQuote(fresh.token)}`
+        + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "")
       : "";
     $("#windowsInstallCommandIntro").textContent = usable
       ? "Run this command from the project root in an elevated PowerShell prompt on the new Windows device:"
@@ -981,7 +988,8 @@ function renderInstallCommand() {
   meta.textContent = tokenMetaText(fresh, status);
   if (usable) {
     const installerURL = `${serverURL}/install/linux.sh`;
-    $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`;
+    $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
+      + (caFingerprint ? ` ${shellQuote(caFingerprint)}` : "");
     $("#installCommandIntro").textContent = "Run this command in a terminal on the new Linux device:";
   } else {
     $("#installCommand").textContent = "";
@@ -2315,6 +2323,7 @@ $("#agentSettingsForm").addEventListener("submit", async (event) => {
 });
 $("#installPlatform").addEventListener("change", renderInstallCommand);
 $("#installServerURL").addEventListener("input", renderInstallCommand);
+$("#installCaFingerprint").addEventListener("input", renderInstallCommand);
 $("#generateEnrollmentToken").addEventListener("click", async () => {
   const button = $("#generateEnrollmentToken");
   button.disabled = true;

@@ -56,16 +56,17 @@ distribution step for a normal install: the certificate is trusted
 correctly from the very first run.
 
 That one CA fetch happens over an unverified connection — trust-on-first-
-use. The agent source tarball fetched right after it is checked against a
-SHA-256 the server publishes at image build time, which catches transport
-corruption or a MITM limited to tampering with only one of those two
-requests, but not one who actively controls the whole first connection
-(they could substitute a matching checksum for their own tarball too) --
-only a certificate the OS already trusts from the start closes that
-completely. Everything the agent does afterward, every job poll and result
-upload, validates against the pinned CA for real. If you want a stronger
-guarantee than trust-on-first-use for that one bootstrap fetch, use Option
-A below to pre-stage the CA file instead of letting the installer fetch it.
+use, by default. The agent source tarball fetched right after it is
+checked against a SHA-256 the server publishes at image build time, which
+catches transport corruption or a MITM limited to tampering with only one
+of those two requests, but not one who actively controls the whole first
+connection (they could substitute a matching checksum for their own
+tarball too) -- only a certificate verified before anything trusts it
+closes that completely. Everything the agent does afterward, every job
+poll and result upload, validates against the pinned CA for real. If you
+want a stronger guarantee than trust-on-first-use for that one bootstrap
+fetch, see "pin the CA's fingerprint" in step 3 below — or pre-stage the
+CA file instead of letting the installer fetch it at all.
 
 ## 3. Trust the certificate (browser, or a stronger guarantee than TOFU)
 
@@ -73,8 +74,8 @@ Caddy's certificate is signed by a private CA it generates on first start,
 stored in the `fleetview-caddy-data` volume — not a certificate your
 system's trust store or browser already knows about. The install scripts
 handle agents automatically (step 2); this section is for your browser, or
-for pre-staging the CA on an endpoint instead of trusting the installer's
-first-fetch.
+for a stronger guarantee than trust-on-first-use for the installer's own
+bootstrap fetch.
 
 Extract the CA once:
 
@@ -92,13 +93,46 @@ sudo docker compose exec caddy find /data -name root.crt
 trust store as a trusted root — this removes the certificate warning and
 gives a clean padlock.
 
-**For an agent**, copy `fleetview-ca.crt` to the endpoint ahead of running
-the install command and set `FLEETVIEW_CA_FILE` in
-`/etc/fleetview-agent/agent.env` (Linux) or
+**For a stronger guarantee than TOFU, pin the CA's fingerprint.** The
+installers fetch `/install/ca.crt` over an unverified connection before
+trusting it — fine against a passive observer, but not against an active
+attacker on that one connection. Closing that gap doesn't require
+pre-staging the certificate file by hand (see below for that alternative):
+compute the fingerprint of the CA you just extracted, once, from a channel
+you trust (the machine running `docker compose`, not the endpoint being
+enrolled):
+
+```bash
+openssl x509 -in fleetview-ca.crt -noout -fingerprint -sha256
+# SHA256 Fingerprint=14:4D:10:AA:FA:64:29:74:FE:39:0A:6E:68:52:16:27:...
+```
+
+Then pass the hex (colons or not, case-insensitive — both installers
+normalize it either way) as an extra argument when enrolling each device:
+
+```bash
+curl -fsSL https://<host>:8443/install/linux.sh | sudo bash -s -- \
+  https://<host>:8443 <enrollment-token> 144D10AAFA642974FE390A6E68521627E815F978B589DE32535C36EA30DC6503
+```
+
+```powershell
+.\scripts\install-agent.ps1 -ServerUrl https://<host>:8443 -EnrollmentToken <token> `
+  -CaFingerprint 144D10AAFA642974FE390A6E68521627E815F978B589DE32535C36EA30DC6503
+```
+
+With a fingerprint supplied, the installer still fetches `/install/ca.crt`
+over that same first connection, but now verifies the result against it
+before trusting anything — a substituted CA is rejected and the install
+aborts — and every request after that (the agent source tarball and its
+checksum included) is fully TLS-verified via `--cacert`, not just fetched
+over the same unverified connection. Omit the argument and both installers
+behave exactly as before: full TOFU, no verification.
+
+**For pre-staging the file instead of fetching it at all**, copy
+`fleetview-ca.crt` to the endpoint ahead of running the install command and
+set `FLEETVIEW_CA_FILE` in `/etc/fleetview-agent/agent.env` (Linux) or
 `%ProgramData%\fleetview-agent\agent.env` (Windows) to its path before
-starting the service — this is only worth doing if you don't want to trust
-the installer's own one-time bootstrap fetch of `/install/ca.crt`; a
-normal install doesn't need it.
+starting the service.
 
 **Skipping validation entirely** is also still available: set
 `FLEETVIEW_ALLOW_INSECURE_TLS=true` in the agent's config instead of

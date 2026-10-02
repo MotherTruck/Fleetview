@@ -339,6 +339,10 @@
                 </select>
               </label>
               <label>Management server URL<input id="installServerURL" type="url" required></label>
+              <div id="installCaFingerprintField" hidden>
+                <label>CA fingerprint (optional)<input id="installCaFingerprint" type="text" placeholder="SHA-256, e.g. 14:4D:10:AA:... — leave blank to trust-on-first-use" autocomplete="off" spellcheck="false"></label>
+                <p class="form-note">Pins the server's private CA instead of trusting it on first fetch. Get this value with <code>openssl x509 -in fleetview-ca.crt -noout -fingerprint -sha256</code> — see docs/TLS.md.</p>
+              </div>
               <label>Device name (optional)<input id="installTokenLabel" type="text" maxlength="255" placeholder="e.g. media-server" autocomplete="off"></label>
               <label>Token expires after
                 <select id="installTokenTTL">

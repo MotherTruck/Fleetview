@@ -11,11 +11,21 @@
     The management server's base URL, e.g. http://192.168.1.50:8080
 .PARAMETER EnrollmentToken
     The one-time token from the dashboard's Agent -> Add a new device page.
+.PARAMETER CaFingerprint
+    Optional SHA-256 fingerprint of the server's private CA (see
+    docs/TLS.md). When set, the CA fetched from /install/ca.crt is verified
+    against it before being trusted, closing the trust-on-first-use gap in
+    that one bootstrap fetch. Omit it to keep the default TOFU behavior.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ServerUrl,
-    [Parameter(Mandatory = $true)][string]$EnrollmentToken
+    [Parameter(Mandatory = $true)][string]$EnrollmentToken,
+    [string]$CaFingerprint = ""
 )
+
+# Normalize to bare uppercase hex so it matches regardless of how the admin
+# copied it -- openssl prints it colon-separated, browsers often don't.
+$CaFingerprint = ($CaFingerprint -replace '[:\s]', '').ToUpperInvariant()
 
 $ErrorActionPreference = "Stop"
 
@@ -51,7 +61,9 @@ New-Item -ItemType Directory -Force -Path $programData | Out-Null
 # an unverified connection and use it for verified validation from then on,
 # the same trust-on-first-use bootstrap the Linux installer uses. A server
 # on plain HTTP, or behind a real publicly-trusted certificate, needs none
-# of this and $caFile simply stays empty.
+# of this and $caFile simply stays empty. Passing -CaFingerprint closes
+# that TOFU gap: the fetched CA is verified against a fingerprint the admin
+# already obtained out-of-band before anything is trusted.
 $caFile = ""
 if ($ServerUrl -like "https://*") {
     $caCandidate = Join-Path $programData "ca.crt"
@@ -73,12 +85,29 @@ if ($ServerUrl -like "https://*") {
     }
     if ($fetched) {
         try {
-            [void][System.Security.Cryptography.X509Certificates.X509Certificate2]::new($caCandidate)
+            $candidateCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($caCandidate)
+            if ($CaFingerprint) {
+                $actualFingerprint = ($candidateCert.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256))
+                if ($actualFingerprint -ne $CaFingerprint) {
+                    Remove-Item -Path $caCandidate -Force -ErrorAction SilentlyContinue
+                    Write-Error "CA fingerprint mismatch (expected $CaFingerprint, got $actualFingerprint); refusing to trust it. This means either the pinned fingerprint is wrong, or something on the network path substituted a different CA."
+                    exit 1
+                }
+            }
             $caFile = $caCandidate
         } catch {
-            # Not a valid certificate -- proceed without pinning one.
+            # Not a valid certificate -- proceed without pinning one, unless
+            # the admin explicitly asked for fingerprint verification, in
+            # which case silently falling back to TOFU would defeat the point.
             Remove-Item -Path $caCandidate -Force -ErrorAction SilentlyContinue
+            if ($CaFingerprint) {
+                Write-Error "Could not fetch a valid CA from $ServerUrl/install/ca.crt to verify against the pinned fingerprint; refusing to install without it."
+                exit 1
+            }
         }
+    } elseif ($CaFingerprint) {
+        Write-Error "Could not fetch a valid CA from $ServerUrl/install/ca.crt to verify against the pinned fingerprint; refusing to install without it."
+        exit 1
     }
 }
 
