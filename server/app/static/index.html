@@ -366,8 +366,8 @@
                 <p id="windowsInstallCommandIntro">Generate a one-time token to get the install command for a new Windows device.</p>
                 <pre id="windowsInstallCommandBlock" hidden><code id="windowsInstallCommand"></code></pre>
                 <p id="windowsInstallTokenMeta" class="form-note" hidden></p>
-                <div class="device-actions"><button id="copyWindowsInstallCommand" type="button" disabled>Copy command</button><a class="button-link secondary" href="/install/agent-source.tar.gz">Download agent source bundle</a></div>
-                <p class="form-note">Run this from an elevated PowerShell prompt in a checkout of this project on the Windows device (the source bundle above contains just the <code>agent/</code> and <code>scripts/</code> folders you need). It builds the agent with Go, writes its configuration, and registers it as a Windows service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
+                <div class="device-actions"><button id="copyWindowsInstallCommand" type="button" disabled>Copy command</button></div>
+                <p class="form-note">Run this from an elevated PowerShell prompt on the new Windows device -- no local checkout or Go toolchain needed, it downloads the small installer script and the agent binary this server already publishes for itself, verifies the binary's SHA-256 against the manifest the server publishes, then registers it as a Windows service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
               </div>
             </div>
           </div>

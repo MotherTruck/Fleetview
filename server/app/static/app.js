@@ -971,12 +971,21 @@ function renderInstallCommand() {
     $("#copyWindowsInstallCommand").disabled = !usable;
     meta.hidden = !fresh;
     meta.textContent = tokenMetaText(fresh, status);
-    $("#windowsInstallCommand").textContent = usable
-      ? `.\\scripts\\install-agent.ps1 -ServerUrl ${psQuote(serverURL)} -EnrollmentToken ${psQuote(fresh.token)}`
-        + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "")
-      : "";
+    if (usable) {
+      const installerURL = `${serverURL}/install/windows.ps1`;
+      // Two statements joined by `;` rather than `irm | iex`: the script
+      // takes named parameters, and interpolating a token/fingerprint into
+      // a string that iex re-parses is a quoting hazard this project
+      // avoids elsewhere too -- `&` with real arguments isn't.
+      $("#windowsInstallCommand").textContent =
+        `$ps1 = "$env:TEMP\\install-fleetview-agent.ps1"; Invoke-WebRequest -Uri ${psQuote(installerURL)} -OutFile $ps1 -UseBasicParsing; `
+        + `& $ps1 -ServerUrl ${psQuote(serverURL)} -EnrollmentToken ${psQuote(fresh.token)}`
+        + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "");
+    } else {
+      $("#windowsInstallCommand").textContent = "";
+    }
     $("#windowsInstallCommandIntro").textContent = usable
-      ? "Run this command from the project root in an elevated PowerShell prompt on the new Windows device:"
+      ? "Run this command from an elevated PowerShell prompt on the new Windows device:"
       : "Generate a one-time token to get the install command for a new Windows device.";
     return;
   }

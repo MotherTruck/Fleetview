@@ -56,12 +56,13 @@ WORKDIR /app
 COPY --from=server-build /src/server-rs/target/release/fleetview-server ./fleetview-server
 COPY server/app/static ./static
 COPY scripts/remote-install-linux.sh /opt/fleetview-install/install-linux.sh
+COPY scripts/install-agent.ps1 /opt/fleetview-install/windows.ps1
 COPY --from=agent-build /out/agent-source.tar.gz /out/agent-source.sha256 /opt/fleetview-install/
 COPY --from=agent-build /out/linux-amd64 /opt/fleetview-install/agent-bin/linux-amd64
 COPY --from=agent-build /out/windows-amd64 /opt/fleetview-install/agent-bin/windows-amd64
 COPY --from=agent-build /out/manifest.json /opt/fleetview-install/agent-bin/manifest.json
 RUN chmod 0644 /opt/fleetview-install/agent-source.tar.gz /opt/fleetview-install/agent-source.sha256 \
-      /opt/fleetview-install/install-linux.sh /opt/fleetview-install/agent-bin/manifest.json \
+      /opt/fleetview-install/install-linux.sh /opt/fleetview-install/windows.ps1 /opt/fleetview-install/agent-bin/manifest.json \
     && chmod 0755 /opt/fleetview-install/agent-bin/linux-amd64/fleetview-agent \
       /opt/fleetview-install/agent-bin/windows-amd64/fleetview-agent.exe \
     && chown -R fleetview:fleetview /app

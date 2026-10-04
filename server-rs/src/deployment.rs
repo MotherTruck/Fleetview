@@ -59,6 +59,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/admin/devices/:id/upgrade-agent", post(upgrade_agent))
         .route("/install/agent-version", get(install_agent_version))
         .route("/install/linux.sh", get(install_linux_script))
+        .route("/install/windows.ps1", get(install_windows_script))
         .route("/install/agent-source.tar.gz", get(install_agent_source))
         .route("/install/agent-source.sha256", get(install_agent_source_checksum))
         .route("/install/agent-linux-amd64", get(install_agent_binary_linux))
@@ -1007,6 +1008,17 @@ async fn install_linux_script() -> Result<impl IntoResponse, ApiError> {
         [
             ("content-type", "text/x-shellscript"),
             ("content-disposition", "attachment; filename=\"install-fleetview-agent.sh\""),
+        ],
+        data,
+    ))
+}
+
+async fn install_windows_script() -> Result<impl IntoResponse, ApiError> {
+    let data = read_install_file("windows.ps1").await.map_err(|_| ApiError::not_found("Windows installer is not available"))?;
+    Ok((
+        [
+            ("content-type", "text/plain; charset=utf-8"),
+            ("content-disposition", "attachment; filename=\"install-fleetview-agent.ps1\""),
         ],
         data,
     ))
