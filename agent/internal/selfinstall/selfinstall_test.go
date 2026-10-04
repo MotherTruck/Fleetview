@@ -125,6 +125,77 @@ func TestDetect_EmptyFieldsRejected(t *testing.T) {
 	}
 }
 
+func TestStripTrailer_RemovesEmbeddedTrailer(t *testing.T) {
+	original := []byte("this is pretend PE binary content, not a real executable")
+	payload := Payload{ServerURL: "https://192.168.1.50:8443", EnrollmentToken: "fv_abc123"}
+	embedded, err := Embed(original, payload)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	stripped := StripTrailer(embedded)
+	if string(stripped) != string(original) {
+		t.Fatalf("StripTrailer did not reproduce the original bytes exactly:\ngot:  %q\nwant: %q", stripped, original)
+	}
+}
+
+func TestStripTrailer_PlainBinaryUnchanged(t *testing.T) {
+	original := []byte("an ordinary binary that was never personalized at all")
+	stripped := StripTrailer(original)
+	if string(stripped) != string(original) {
+		t.Fatalf("StripTrailer modified a plain binary with no trailer")
+	}
+}
+
+// Reproduces the exact real-world bug this fixes: installService (see
+// service_windows.go) copies the currently-running exe's bytes to its
+// installed location before registering the service. Before StripTrailer
+// existed, that copy still carried the trailer, so the SCM-started
+// service process would Detect its own leftover trailer on every future
+// start and try to self-install a second time against itself -- hitting
+// "already installed" and exiting without ever reaching svc.Run. The
+// service existed (CreateService had succeeded) but could never actually
+// start. This proves the installed copy, after StripTrailer, correctly
+// reports ok=false -- it must fall through to normal service dispatch.
+func TestStripTrailer_InstalledCopyIsNoLongerDetectedAsPersonalized(t *testing.T) {
+	downloadedExe := []byte("pretend real PE bytes for the downloaded installer")
+	payload := Payload{ServerURL: "http://192.168.1.93:6969", EnrollmentToken: "fv_realEnrollmentToken"}
+	downloaded, err := Embed(downloadedExe, payload)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+
+	// The downloaded file itself must still be detected (this is what the
+	// user's first double-click runs).
+	downloadedPath := writeTemp(t, downloaded)
+	_, ok, err := Detect(downloadedPath)
+	if err != nil || !ok {
+		t.Fatalf("the downloaded installer itself should be detected as personalized: ok=%v err=%v", ok, err)
+	}
+
+	// Simulate installService's copy step: strip, then write to the
+	// "installed" location.
+	installedBytes := StripTrailer(downloaded)
+	installedPath := filepath.Join(t.TempDir(), "installed", "fleetview-agent.exe")
+	if err := os.MkdirAll(filepath.Dir(installedPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(installedPath, installedBytes, 0o755); err != nil {
+		t.Fatalf("write installed copy: %v", err)
+	}
+
+	// The copy the SCM will actually launch as the service must NOT be
+	// detected as personalized -- this is the exact check main.go's
+	// runSelfInstallIfPersonalized performs on every service start.
+	_, ok, err = Detect(installedPath)
+	if err != nil {
+		t.Fatalf("Detect on installed copy returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("BUG REPRODUCED: the installed copy still carries the trailer -- " +
+			"the service process would re-trigger self-install on every start instead of running")
+	}
+}
+
 // Mirrors exactly what server-rs/src/deployment.rs's
 // install_agent_installer_windows produces, byte for byte, independent
 // of this package's own Embed helper -- catches any future drift between

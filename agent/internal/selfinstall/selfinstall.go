@@ -38,60 +38,79 @@ type Payload struct {
 	EnrollmentToken string `json:"enrollment_token"`
 }
 
-// Detect reads path's own trailing bytes looking for an appended Payload.
-// It never returns an error for an ordinary binary that simply isn't a
+// locateTrailer finds a well-formed trailer at the very end of data and
+// returns the byte offset where it begins (equivalently, the length of
+// the original binary before Embed appended anything) and the raw JSON
+// payload bytes. ok=false for anything that isn't a complete,
+// well-formed trailer -- a short file, a near-miss marker, or an
+// out-of-bounds length prefix -- never an error, since "no trailer"
+// must be indistinguishable from "corrupted trailer" to a caller: both
+// mean "treat this as an ordinary binary." The single shared source of
+// truth Detect and StripTrailer both build on, so they can never
+// disagree about where the trailer starts.
+func locateTrailer(data []byte) (offset int64, payloadBytes []byte, ok bool) {
+	size := int64(len(data))
+	markerLen := int64(len(Marker))
+	if size < markerLen+4 {
+		return 0, nil, false
+	}
+	if !bytes.Equal(data[size-markerLen:], []byte(Marker)) {
+		return 0, nil, false
+	}
+	payloadLen := int64(binary.LittleEndian.Uint32(data[size-markerLen-4 : size-markerLen]))
+	if payloadLen <= 0 || payloadLen > maxPayloadLen || payloadLen > size-markerLen-4 {
+		return 0, nil, false
+	}
+	start := size - markerLen - 4 - payloadLen
+	return start, data[start : start+payloadLen], true
+}
+
+// Detect reads path's own bytes looking for an appended Payload. It
+// never returns an error for an ordinary binary that simply isn't a
 // personalized installer -- including one that's merely too small to
 // hold a trailer, has a near-miss (not exact) marker, or has a
 // corrupted/truncated length prefix: all of those come back as
 // ok=false, nil, exactly like a binary with no trailer at all, so a
 // caller can always just check `ok` and fall through to normal behavior.
-// A non-nil error is reserved for failing to even open or stat the file.
+// A non-nil error is reserved for failing to even open or read the file.
 func Detect(path string) (payload Payload, ok bool, err error) {
-	file, err := os.Open(path) // #nosec G304 -- path is this process's own os.Executable(), not external input
+	data, err := os.ReadFile(path) // #nosec G304 -- path is this process's own os.Executable(), not external input
 	if err != nil {
 		return Payload{}, false, err
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return Payload{}, false, err
-	}
-
-	markerLen := int64(len(Marker))
-	size := info.Size()
-	if size < markerLen+4 {
+	_, payloadBytes, found := locateTrailer(data)
+	if !found {
 		return Payload{}, false, nil
 	}
-
-	markerBuf := make([]byte, markerLen)
-	if _, readErr := file.ReadAt(markerBuf, size-markerLen); readErr != nil {
-		return Payload{}, false, nil
-	}
-	if !bytes.Equal(markerBuf, []byte(Marker)) {
-		return Payload{}, false, nil
-	}
-
-	lenBuf := make([]byte, 4)
-	if _, readErr := file.ReadAt(lenBuf, size-markerLen-4); readErr != nil {
-		return Payload{}, false, nil
-	}
-	payloadLen := int64(binary.LittleEndian.Uint32(lenBuf))
-	if payloadLen <= 0 || payloadLen > maxPayloadLen || payloadLen > size-markerLen-4 {
-		return Payload{}, false, nil
-	}
-
-	payloadBuf := make([]byte, payloadLen)
-	if _, readErr := file.ReadAt(payloadBuf, size-markerLen-4-payloadLen); readErr != nil {
-		return Payload{}, false, nil
-	}
-	if jsonErr := json.Unmarshal(payloadBuf, &payload); jsonErr != nil {
+	if jsonErr := json.Unmarshal(payloadBytes, &payload); jsonErr != nil {
 		return Payload{}, false, nil
 	}
 	if payload.ServerURL == "" || payload.EnrollmentToken == "" {
 		return Payload{}, false, nil
 	}
 	return payload, true, nil
+}
+
+// StripTrailer returns data with any trailer removed, so a binary about
+// to be installed/copied elsewhere (see installService in
+// service_windows.go) is an ordinary one that won't mistake itself for
+// a personalized installer the next time it runs -- specifically, the
+// next time it runs AS the Windows service the SCM starts, which must
+// reach normal service dispatch, not Detect its own leftover trailer
+// and try to self-install a second time against itself (which is
+// exactly what happened before this existed: the installed copy in
+// Program Files still carried the trailer, so the SCM-started service
+// process immediately re-triggered self-install, hit "already
+// installed", and exited without ever calling svc.Run -- the service
+// existed but could never actually start). Returns data unchanged if it
+// carries no trailer at all, so calling it unconditionally on every
+// binary this process ever installs is always safe.
+func StripTrailer(data []byte) []byte {
+	offset, _, ok := locateTrailer(data)
+	if !ok {
+		return data
+	}
+	return data[:offset]
 }
 
 // Embed appends a trailer to binary matching exactly what the server's

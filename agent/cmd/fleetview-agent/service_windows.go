@@ -16,6 +16,7 @@ import (
 	"fleetview-agent/internal/client"
 	"fleetview-agent/internal/config"
 	"fleetview-agent/internal/model"
+	"fleetview-agent/internal/selfinstall"
 )
 
 func programDataDir() string {
@@ -139,6 +140,16 @@ func installService(configPath string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", currentExe, err)
 		}
+		// Strip any personalized-installer trailer (see
+		// internal/selfinstall) before installing: the copy that ends up
+		// running as the actual Windows service must be an ordinary
+		// binary, or the SCM-started service process would detect its
+		// own leftover trailer on every future start and try to
+		// self-install a second time against itself instead of ever
+		// reaching svc.Run -- a no-op for a plain binary that never had
+		// a trailer to begin with (the "-service install" CLI flag's own
+		// normal path).
+		data = selfinstall.StripTrailer(data)
 		if err := os.MkdirAll(installDir(), 0755); err != nil {
 			return fmt.Errorf("create %s: %w", installDir(), err)
 		}
