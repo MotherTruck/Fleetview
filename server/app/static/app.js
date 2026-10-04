@@ -967,11 +967,20 @@ function renderInstallCommand() {
 
   if (windows) {
     const meta = $("#windowsInstallTokenMeta");
-    $("#windowsInstallCommandBlock").hidden = !usable;
-    $("#copyWindowsInstallCommand").disabled = !usable;
+    $("#windowsInstallerSection").hidden = !usable;
     meta.hidden = !fresh;
     meta.textContent = tokenMetaText(fresh, status);
     if (usable) {
+      // The downloadable installer is TOFU-only (see
+      // /install/agent-windows-installer.exe and internal/selfinstall in
+      // the agent) -- there's nowhere to type a pinned fingerprint into a
+      // double-click, so caFingerprint intentionally never reaches this
+      // URL even when set; an admin who wants that stronger guarantee
+      // uses the PowerShell command below instead.
+      const downloadURL = `${serverURL}/install/agent-windows-installer.exe`
+        + `?server_url=${encodeURIComponent(serverURL)}&token=${encodeURIComponent(fresh.token)}`;
+      $("#windowsInstallerDownload").href = downloadURL;
+
       const installerURL = `${serverURL}/install/windows.ps1`;
       // Two statements joined by `;` rather than `irm | iex`: the script
       // takes named parameters, and interpolating a token/fingerprint into
@@ -982,11 +991,12 @@ function renderInstallCommand() {
         + `& $ps1 -ServerUrl ${psQuote(serverURL)} -EnrollmentToken ${psQuote(fresh.token)}`
         + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "");
     } else {
+      $("#windowsInstallerDownload").href = "#";
       $("#windowsInstallCommand").textContent = "";
     }
     $("#windowsInstallCommandIntro").textContent = usable
-      ? "Run this command from an elevated PowerShell prompt on the new Windows device:"
-      : "Generate a one-time token to get the install command for a new Windows device.";
+      ? "Download this and run it on the new Windows device:"
+      : "Generate a one-time token to get the installer for a new Windows device.";
     return;
   }
 

@@ -27,11 +27,20 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.24.0"
+var version = "0.25.0"
 
 const serviceName = "fleetview-agent"
 
 func main() {
+	// Checked before any flag parsing: a personalized installer (see
+	// selfinstall_windows.go) is run by double-clicking it from the
+	// dashboard's download, with zero arguments, so this has to be the
+	// very first thing main does -- not a flag, since there's no command
+	// line to put one on.
+	if runSelfInstallIfPersonalized() {
+		return
+	}
+
 	configPath := flag.String("config", defaultConfigPath(), "path to agent configuration")
 	serviceAction := flag.String("service", "", "service control action: install, uninstall, start, stop (Windows only)")
 	uninstallCode := flag.String("uninstall-code", "", "managed-uninstall code for -service uninstall; prompted for if omitted and one is configured")

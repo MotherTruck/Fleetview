@@ -2,7 +2,7 @@
 //! custom-package bundles, ad-hoc command execution, network diagnostics,
 //! Wake-on-LAN, and remote agent upgrades.
 use axum::body::Bytes;
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -24,6 +24,15 @@ use crate::AppState;
 const MAX_FILE: usize = 8 * 1024 * 1024;
 const MAX_TOTAL: usize = 16 * 1024 * 1024;
 const MAX_COMMAND: usize = 4096;
+
+// Appended to the published Windows agent binary to make a personalized,
+// download-and-double-click installer (see install_agent_installer_windows
+// below and agent/internal/selfinstall, which parses this same trailer
+// format): [JSON payload][4-byte LE length][16-byte magic]. The plain,
+// unmodified /install/agent-windows-amd64.exe binary (used for the remote
+// "Upgrade agent" job) carries none of this and is unaffected.
+const INSTALLER_TRAILER_MAGIC: &[u8; 16] = b"FVAGENTINSTALL01";
+const MAX_INSTALLER_FIELD_LEN: usize = 2048;
 
 fn install_dir() -> PathBuf {
     std::env::var("FLEETVIEW_INSTALL_DIR")
@@ -64,6 +73,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/install/agent-source.sha256", get(install_agent_source_checksum))
         .route("/install/agent-linux-amd64", get(install_agent_binary_linux))
         .route("/install/agent-windows-amd64.exe", get(install_agent_binary_windows))
+        .route("/install/agent-windows-installer.exe", get(install_agent_installer_windows))
 }
 
 // -- version-gate helpers --
@@ -1066,6 +1076,49 @@ async fn install_agent_binary_windows() -> Result<impl IntoResponse, ApiError> {
         [
             ("content-type", "application/octet-stream"),
             ("content-disposition", "attachment; filename=\"fleetview-agent.exe\""),
+        ],
+        data,
+    ))
+}
+
+#[derive(Deserialize)]
+struct InstallerQuery {
+    server_url: String,
+    token: String,
+}
+
+// Serves the same published Windows binary as install_agent_binary_windows
+// above, but with this one enrollment's server URL + token appended as a
+// trailer (see INSTALLER_TRAILER_MAGIC) -- no DB lookup or token
+// consumption here, same as every other /install/* endpoint; the token is
+// still validated and consumed only when the agent actually enrolls,
+// exactly as it is for the PowerShell/bash install commands. Not a new
+// trust boundary: this is the same server URL and token an admin already
+// gets back from this server to paste into a command -- just packaged
+// into a file instead of command-line text.
+async fn install_agent_installer_windows(Query(query): Query<InstallerQuery>) -> Result<impl IntoResponse, ApiError> {
+    let server_url = query.server_url.trim();
+    let token = query.token.trim();
+    if server_url.is_empty() || token.is_empty() {
+        return Err(ApiError::bad_request("server_url and token are required"));
+    }
+    if server_url.len() > MAX_INSTALLER_FIELD_LEN || token.len() > MAX_INSTALLER_FIELD_LEN {
+        return Err(ApiError::bad_request("server_url or token is too long"));
+    }
+    let mut data = tokio::fs::read(install_dir().join("agent-bin").join("windows-amd64").join("fleetview-agent.exe"))
+        .await
+        .map_err(|_| ApiError::not_found("Published Windows agent binary is not available"))?;
+    let payload = json!({ "server_url": server_url, "enrollment_token": token }).to_string();
+    let payload_bytes = payload.into_bytes();
+    let payload_len = u32::try_from(payload_bytes.len())
+        .map_err(|_| ApiError::bad_request("server_url or token is too long"))?;
+    data.extend_from_slice(&payload_bytes);
+    data.extend_from_slice(&payload_len.to_le_bytes());
+    data.extend_from_slice(INSTALLER_TRAILER_MAGIC);
+    Ok((
+        [
+            ("content-type", "application/octet-stream"),
+            ("content-disposition", "attachment; filename=\"fleetview-agent-installer.exe\""),
         ],
         data,
     ))

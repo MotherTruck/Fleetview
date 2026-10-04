@@ -363,11 +363,15 @@
               </div>
               <div id="windowsInstallOutput" hidden>
                 <p class="unsupported-note">Windows support is new and hasn't been verified on real Windows hardware yet. Expect rough edges.</p>
-                <p id="windowsInstallCommandIntro">Generate a one-time token to get the install command for a new Windows device.</p>
-                <pre id="windowsInstallCommandBlock" hidden><code id="windowsInstallCommand"></code></pre>
-                <p id="windowsInstallTokenMeta" class="form-note" hidden></p>
-                <div class="device-actions"><button id="copyWindowsInstallCommand" type="button" disabled>Copy command</button></div>
-                <p class="form-note">Run this from an elevated PowerShell prompt on the new Windows device -- no local checkout or Go toolchain needed, it downloads the small installer script and the agent binary this server already publishes for itself, verifies the binary's SHA-256 against the manifest the server publishes, then registers it as a Windows service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
+                <p id="windowsInstallCommandIntro">Generate a one-time token to get the installer for a new Windows device.</p>
+                <div id="windowsInstallerSection" hidden>
+                  <div class="device-actions"><a id="windowsInstallerDownload" class="button-link" href="#">Download installer (.exe)</a></div>
+                  <p id="windowsInstallTokenMeta" class="form-note" hidden></p>
+                  <p class="form-note">Right-click the downloaded file on the new Windows device and choose "Run as administrator". It installs the agent and enrolls this device automatically -- no command line needed. The server URL and token are embedded in this one download, so each token enrolls exactly one device and then stops working; the file is only good for one install.</p>
+                  <p class="form-note">Prefer a command line? Equivalent PowerShell, for an elevated prompt:</p>
+                  <pre id="windowsInstallCommandBlock"><code id="windowsInstallCommand"></code></pre>
+                  <div class="device-actions"><button id="copyWindowsInstallCommand" type="button">Copy command</button></div>
+                </div>
               </div>
             </div>
           </div>
