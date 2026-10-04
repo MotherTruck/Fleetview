@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.25.3"
+var version = "0.26.0"
 
 const serviceName = "fleetview-agent"
 
@@ -38,6 +38,13 @@ func main() {
 	// very first thing main does -- not a flag, since there's no command
 	// line to put one on.
 	if runSelfInstallIfPersonalized() {
+		return
+	}
+	// Also checked before flag parsing, for the same reason: this process
+	// invocation is the screen-capture helper the service spawns into a
+	// user's session for remote control (see screenhelper_windows.go), not
+	// a normal agent run, and its arguments aren't normal flags either.
+	if runScreenHelperIfRequested() {
 		return
 	}
 

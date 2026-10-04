@@ -12,6 +12,68 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// wtsCurrentServerHandle is the documented sentinel for "the local Terminal
+// Services server" (WTS_CURRENT_SERVER_HANDLE, a NULL handle) accepted by
+// WTSEnumerateSessions.
+const wtsCurrentServerHandle = windows.Handle(0)
+
+// findCaptureSession looks for a session worth capturing: the one actively
+// using the machine (WTSActive), or failing that, one that's logged in but
+// not currently the foreground session (WTSConnected, e.g. an RDP session
+// that's been tabbed away from locally without disconnecting). This is
+// deliberately wider than just "the console session"
+// (WTSGetActiveConsoleSessionId): that call only ever reports the physical
+// console, so a device accessed exclusively over RDP -- the common case for
+// a remote test VM -- would otherwise always look session-less even while
+// someone is actively logged in and working. Session 0 (services, no
+// desktop) is always excluded.
+//
+// This enumeration-based search is the least-verified piece of this file
+// (no real multi-session Windows install was available to test it against);
+// WTSGetActiveConsoleSessionId is kept as a fallback for when enumeration
+// itself fails, preserving this package's previously-verified single-
+// session behavior (including under Wine, where WTSEnumerateSessions'
+// support is unclear) if the richer search can't run at all.
+func findCaptureSession() (uint32, bool) {
+	var sessions *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(wtsCurrentServerHandle, 0, 1, &sessions, &count); err == nil {
+		defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
+		list := unsafe.Slice(sessions, count)
+		fallback, haveFallback := uint32(0), false
+		for _, s := range list {
+			if s.SessionID == 0 {
+				continue
+			}
+			if s.State == windows.WTSActive {
+				return s.SessionID, true
+			}
+			if s.State == windows.WTSConnected && !haveFallback {
+				fallback, haveFallback = s.SessionID, true
+			}
+		}
+		if haveFallback {
+			return fallback, true
+		}
+	}
+	if id := wtsGetActiveConsoleSessionId(); id != 0xFFFFFFFF {
+		return id, true
+	}
+	return 0, false
+}
+
+// currentSessionID reports which session this process itself is running in
+// -- 0 for a service running as LocalSystem, matching whichever real user
+// session happened to start it for anything else (an interactive debug run,
+// or a test harness).
+func currentSessionID() (uint32, error) {
+	var id uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &id); err != nil {
+		return 0, fmt.Errorf("ProcessIdToSessionId: %w", err)
+	}
+	return id, nil
+}
+
 // GDI (gdi32.dll) and SendInput (user32.dll) are not wrapped by
 // golang.org/x/sys/windows, so they're bound directly here the same way
 // this package's other Windows-specific calls already are: a
@@ -72,12 +134,8 @@ func wtsGetActiveConsoleSessionId() uint32 {
 }
 
 func Detect() Capability {
-	// 0xFFFFFFFF means no session is currently attached to the physical
-	// console -- most commonly a Server Core install, or a machine nobody
-	// has ever logged into locally. Anything else means there's an active
-	// (or at least disconnected-but-existing) desktop session to capture.
-	if wtsGetActiveConsoleSessionId() == 0xFFFFFFFF {
-		return Capability{Reason: "No active console session was found on this device"}
+	if _, ok := findCaptureSession(); !ok {
+		return Capability{Reason: "No active session (console or remote desktop) was found on this device"}
 	}
 	return Capability{Available: true, DisplayServer: "windows"}
 }
@@ -86,10 +144,27 @@ type windowsSession struct {
 	width, height int
 }
 
+// NewSession captures and injects input directly via GDI/SendInput, which
+// only ever operate on the calling process's own session -- correct when
+// this process already runs in the session being captured (an interactive
+// run, or a test), but not when it's a LocalSystem service in session 0
+// capturing a real user's session 1 (or an RDP session). That case is
+// detected here and handed off to spawnHelperSession instead, which
+// launches a copy of this same capture/injection code into the target
+// session and relays frames/input back over a pair of named pipes -- see
+// remotesession_windows.go and helper_windows.go.
 func NewSession() (Session, error) {
-	if wtsGetActiveConsoleSessionId() == 0xFFFFFFFF {
-		return nil, fmt.Errorf("no active console session was found")
+	target, ok := findCaptureSession()
+	if !ok {
+		return nil, fmt.Errorf("no active session (console or remote desktop) was found")
 	}
+	if own, err := currentSessionID(); err == nil && own == target {
+		return newLocalSession()
+	}
+	return spawnHelperSession(target)
+}
+
+func newLocalSession() (Session, error) {
 	width, _, _ := procGetSystemMetrics.Call(uintptr(smCXScreen))
 	height, _, _ := procGetSystemMetrics.Call(uintptr(smCYScreen))
 	if width == 0 || height == 0 {
