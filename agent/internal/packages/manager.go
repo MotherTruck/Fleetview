@@ -22,6 +22,40 @@ type Manager interface {
 	Install(ctx context.Context, packageName string) (output string, exitCode int, err error)
 }
 
+// NullManager stands in when Detect finds no real package manager on this
+// device (see detect_windows.go: winget missing is common on a fresh
+// Windows install/VM, and Windows Server doesn't ship it at all). Package
+// management is one optional capability among many -- enrollment,
+// metrics, inventory, the live terminal, Wake-on-LAN, none of it depends
+// on a package manager -- so a device without one still enrolls and
+// reports normally, just with no installed-package/update data and a
+// clear rejection if a package-deployment job is ever sent to it, rather
+// than the whole agent refusing to start at all.
+type NullManager struct {
+	// Reason is folded into InstallUpdates/Install's error so a rejected
+	// package job's result explains why, instead of just "no package
+	// manager available" with no further detail.
+	Reason string
+}
+
+func (n NullManager) Name() string { return "none" }
+
+func (n NullManager) Installed(context.Context) ([]model.Package, error) {
+	return []model.Package{}, nil
+}
+
+func (n NullManager) Updates(context.Context) ([]model.Update, error) {
+	return []model.Update{}, nil
+}
+
+func (n NullManager) InstallUpdates() (string, int, error) {
+	return "", 0, fmt.Errorf("no package manager available on this device: %s", n.Reason)
+}
+
+func (n NullManager) Install(context.Context, string) (string, int, error) {
+	return "", 0, fmt.Errorf("no package manager available on this device: %s", n.Reason)
+}
+
 var literalPackage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+:-]{0,254}$`)
 
 // Uninstall intentionally avoids purge, autoremove, recursive removal, and

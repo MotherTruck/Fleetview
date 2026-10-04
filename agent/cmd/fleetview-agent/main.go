@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.25.1"
+var version = "0.25.2"
 
 const serviceName = "fleetview-agent"
 
@@ -117,7 +117,15 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 
 	manager, err := packages.Detect()
 	if err != nil {
-		return err
+		// A missing package manager (e.g. winget not present -- common on
+		// a fresh Windows install/VM, and Windows Server doesn't ship it
+		// at all) shouldn't take down the whole agent: enrollment,
+		// metrics, inventory, the live terminal, and Wake-on-LAN are all
+		// fully independent of it. The device just reports no installed-
+		// package/update data and clearly rejects a package-deployment
+		// job if one is ever sent to it instead.
+		logger.Printf("package manager unavailable, continuing without it: %v", err)
+		manager = packages.NullManager{Reason: err.Error()}
 	}
 	// Runs on every startup, including the restart a self-upgrade
 	// (UPGRADE_AGENT) triggers, so remote control is fully self-contained:
