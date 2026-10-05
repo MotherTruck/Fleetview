@@ -150,6 +150,16 @@ pub struct MetricSample {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct ContainerMetricSample {
+    pub id: i32,
+    pub device_id: String,
+    pub recorded_at: DateTime<Utc>,
+    pub container_name: String,
+    pub cpu_percent: f64,
+    pub memory_bytes: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Package {
     pub id: String,
     pub name: String,

@@ -40,6 +40,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/v1/admin/devices/:id/settings", put(update_device_settings))
         .route("/api/v1/admin/devices/:id/metrics", get(get_device_metrics))
+        .route("/api/v1/admin/devices/:id/container-metrics", get(get_device_container_metrics))
         .route(
             "/api/v1/admin/devices/:id/vulnerability-schedule",
             get(get_scan_schedule).put(set_scan_schedule),
@@ -544,6 +545,13 @@ async fn report_vulnerabilities(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Truncates to at most `max` chars (not bytes -- a byte-index slice can
+/// panic mid multi-byte UTF-8 character), for a free-text agent-reported
+/// value going into a bounded VARCHAR column.
+fn truncate_chars(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
+
 #[derive(Deserialize, Serialize)]
 pub(crate) struct MetricsReportPayload {
     recorded_at: DateTime<Utc>,
@@ -606,6 +614,23 @@ async fn report_metrics(
     .execute(&mut *tx)
     .await?;
 
+    for item in payload.top_consumers.iter().filter(|item| item.get("kind").and_then(Value::as_str) == Some("container")) {
+        let Some(name) = item.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else { continue };
+        let cpu_percent = item.get("cpu_percent").and_then(Value::as_f64).unwrap_or(0.0);
+        let memory_bytes = item.get("memory_bytes").and_then(Value::as_i64).unwrap_or(0);
+        sqlx::query(
+            "INSERT INTO container_metric_samples (device_id, recorded_at, container_name, cpu_percent, memory_bytes) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&device.id)
+        .bind(payload.recorded_at)
+        .bind(truncate_chars(name, 255))
+        .bind(cpu_percent)
+        .bind(memory_bytes)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     let mut inventory = as_object(&device.inventory);
     inventory.insert("_monitoring".to_string(), json!({ "current": payload }));
     sqlx::query("UPDATE devices SET inventory = $1, last_seen = $2 WHERE id = $3")
@@ -622,6 +647,11 @@ async fn report_metrics(
         .clamp(1, 90);
     let cutoff = Utc::now() - Duration::days(retention_days);
     sqlx::query("DELETE FROM metric_samples WHERE device_id = $1 AND recorded_at < $2")
+        .bind(&device.id)
+        .bind(cutoff)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM container_metric_samples WHERE device_id = $1 AND recorded_at < $2")
         .bind(&device.id)
         .bind(cutoff)
         .execute(&mut *tx)
@@ -841,6 +871,7 @@ async fn delete_device(
     sqlx::query("DELETE FROM vulnerability_schedules WHERE device_id = $1").bind(&id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM compliance_snapshots WHERE device_id = $1").bind(&id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM metric_samples WHERE device_id = $1").bind(&id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM container_metric_samples WHERE device_id = $1").bind(&id).execute(&mut *tx).await?;
     sqlx::query("UPDATE enrollment_tokens SET used_by_device_id = NULL WHERE used_by_device_id = $1")
         .bind(&id)
         .execute(&mut *tx)
@@ -947,6 +978,33 @@ async fn get_device_metrics(
          process_count, temperature_celsius, uptime_seconds \
          FROM metric_samples WHERE device_id = $1 AND recorded_at >= $2 \
          ORDER BY recorded_at DESC LIMIT 10080",
+    )
+    .bind(&id)
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+    samples.reverse();
+    Ok(Json(samples))
+}
+
+async fn get_device_container_metrics(
+    State(state): State<Arc<AppState>>,
+    _viewer: Viewer,
+    Path(id): Path<String>,
+    Query(query): Query<MetricsQuery>,
+) -> Result<Json<Vec<crate::models::ContainerMetricSample>>, ApiError> {
+    let hours = query.hours.clamp(1, 168);
+    if fetch_device(&state, &id).await?.is_none() {
+        return Err(ApiError::not_found("Device not found"));
+    }
+    let cutoff = Utc::now() - Duration::hours(hours);
+    // 120,960 = TopConsumersLimit (12 containers/sample) * get_device_metrics's
+    // own 10,080 (one sample/minute for a full week) cap -- this table can
+    // have up to that many container rows per device per week.
+    let mut samples = sqlx::query_as::<_, crate::models::ContainerMetricSample>(
+        "SELECT id, device_id, recorded_at, container_name, cpu_percent, memory_bytes \
+         FROM container_metric_samples WHERE device_id = $1 AND recorded_at >= $2 \
+         ORDER BY recorded_at DESC LIMIT 120960",
     )
     .bind(&id)
     .bind(cutoff)
