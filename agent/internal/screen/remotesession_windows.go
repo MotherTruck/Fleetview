@@ -40,8 +40,31 @@ func spawnHelperSession(sessionID uint32) (*remoteScreenSession, error) {
 	}
 	defer userToken.Close()
 
+	// WTSQueryUserToken returns the filtered, standard-rights token for
+	// this session -- the same one Explorer and everything else in a
+	// normal desktop session runs with, even when the logged-on user is
+	// an administrator. Windows' UIPI then blocks a process at that
+	// (medium) integrity level from sending input to any higher-integrity
+	// window, such as Task Manager or PowerShell run elevated ("Run as
+	// administrator"): screen capture still works (UIPI only restricts
+	// input), but every click and keystroke into that window is silently
+	// dropped. If this user is an administrator with UAC enabled, Windows
+	// keeps a second, linked token for them -- the full elevated one,
+	// same user, same login -- and GetLinkedToken returns it. Using it
+	// here isn't a privilege escalation: it's the SYSTEM-level agent
+	// service (already more privileged than any local admin) choosing
+	// the already-logged-in user's OTHER already-available token so the
+	// helper can reach elevated windows too. A standard, non-admin user
+	// has no linked token; GetLinkedToken then just errors and the
+	// original token is used as-is, exactly as before.
+	tokenForHelper := userToken
+	if linked, linkErr := userToken.GetLinkedToken(); linkErr == nil && linked != 0 {
+		defer linked.Close()
+		tokenForHelper = linked
+	}
+
 	var primaryToken windows.Token
-	if err := windows.DuplicateTokenEx(userToken, 0, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primaryToken); err != nil {
+	if err := windows.DuplicateTokenEx(tokenForHelper, 0, nil, windows.SecurityImpersonation, windows.TokenPrimary, &primaryToken); err != nil {
 		return nil, fmt.Errorf("duplicate user token as a primary token: %w", err)
 	}
 	defer primaryToken.Close()
