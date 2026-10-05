@@ -195,6 +195,14 @@ async fn pending_patches(state: &AppState, device: &Device) -> Result<Vec<Value>
     Ok(result)
 }
 
+/// pacman and windows-update both only ever install everything pending in
+/// one shot (`pacman -Syu`, the Windows Update Agent COM API) -- neither
+/// agent-side installer can selectively apply a subset, so approving less
+/// than the full pending set can never actually be deployed for either.
+fn requires_full_approval(package_manager: Option<&str>) -> bool {
+    matches!(package_manager, Some("pacman") | Some("windows-update"))
+}
+
 async fn approved_snapshot(state: &AppState, device: &Device) -> Result<Vec<Value>, ApiError> {
     let patches = pending_patches(state, device).await?;
     let selected: Vec<&Value> = patches
@@ -204,12 +212,12 @@ async fn approved_snapshot(state: &AppState, device: &Device) -> Result<Vec<Valu
     if selected.is_empty() {
         return Err(ApiError::conflict("No supported approved patches are pending"));
     }
-    if device.package_manager.as_deref() == Some("pacman") && selected.len() != patches.len() {
+    if requires_full_approval(device.package_manager.as_deref()) && selected.len() != patches.len() {
         return Err(ApiError::conflict(
-            "Arch requires approval of every pending package for a full system upgrade",
+            "This device requires approval of every pending patch before they can be installed",
         ));
     }
-    if !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget")) {
+    if !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget") | Some("windows-update")) {
         return Err(ApiError::bad_request("Patch installation is unsupported on this device"));
     }
     Ok(selected
@@ -301,10 +309,10 @@ pub async fn queue_scheduled_patch(tx: &mut sqlx::PgConnection, device: &Device)
     if selected.is_empty() {
         return Ok(());
     }
-    if device.package_manager.as_deref() == Some("pacman") && selected.len() != patches.len() {
+    if requires_full_approval(device.package_manager.as_deref()) && selected.len() != patches.len() {
         return Ok(());
     }
-    if !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget")) {
+    if !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget") | Some("windows-update")) {
         return Ok(());
     }
     let options = json!({
@@ -499,7 +507,7 @@ async fn set_patch_schedule(
     let Some(device) = fetch_device(&state, &id).await? else {
         return Err(ApiError::not_found("Device not found"));
     };
-    if payload.interval_hours != 0 && !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget")) {
+    if payload.interval_hours != 0 && !matches!(device.package_manager.as_deref(), Some("apt") | Some("pacman") | Some("winget") | Some("windows-update")) {
         return Err(ApiError::bad_request("Patch scheduling is unsupported on this device"));
     }
     sqlx::query(
@@ -1122,4 +1130,50 @@ async fn install_agent_installer_windows(Query(query): Query<InstallerQuery>) ->
         ],
         data,
     ))
+}
+
+#[cfg(test)]
+mod patch_approval_tests {
+    use super::*;
+
+    #[test]
+    fn requires_full_approval_for_pacman_and_windows_update_only() {
+        assert!(requires_full_approval(Some("pacman")));
+        assert!(requires_full_approval(Some("windows-update")));
+        assert!(!requires_full_approval(Some("apt")));
+        assert!(!requires_full_approval(Some("winget")));
+        assert!(!requires_full_approval(None));
+    }
+
+    #[test]
+    fn patch_key_prefers_a_kb_identifier_over_the_free_text_package_name() {
+        // Windows Update's own package name ("Windows Update: <title>
+        // (<KB>)") contains spaces and parens and would fail
+        // safe_package_name on its own -- this is the exact entry shape
+        // entriesToUpdates (the agent's windowsupdatetable.go) produces.
+        let item = json!({
+            "package": "Windows Update: 2024-01 Cumulative Update (KB5034123)",
+            "identifier": "KB5034123",
+            "available_version": "KB5034123",
+        });
+        assert_eq!(patch_key(&item), Some(("KB5034123".to_string(), "KB5034123".to_string())));
+    }
+
+    #[test]
+    fn patch_key_drops_entries_whose_only_name_has_unsafe_characters() {
+        // No identifier at all (e.g. a stale pre-fix agent report): falls
+        // back to the free-text package name, which fails the safe-name
+        // check and is dropped rather than shown broken.
+        let item = json!({
+            "package": "Windows Update: 2024-01 Cumulative Update (KB5034123)",
+            "available_version": "KB5034123",
+        });
+        assert_eq!(patch_key(&item), None);
+    }
+
+    #[test]
+    fn patch_key_falls_back_to_package_name_when_it_is_already_safe() {
+        let item = json!({ "package": "openssl", "available_version": "3.0.1" });
+        assert_eq!(patch_key(&item), Some(("openssl".to_string(), "3.0.1".to_string())));
+    }
 }

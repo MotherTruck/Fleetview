@@ -29,8 +29,15 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 	}
 	available := make(map[string]string, len(live))
 	for _, patch := range live {
+		// Mirrors the server's own patch_key precedence (deployment.rs):
+		// identifier first, falling back to the free-text package name.
+		// Needed for any entry with a real Identifier, not just winget's
+		// own packages -- the OS Windows Update entries both Winget and
+		// WindowsUpdateOnly report carry a KB-number Identifier too (see
+		// entriesToUpdates, windowsupdatetable.go), and the approved list
+		// the server sends back is keyed the same way.
 		key := patch.Package
-		if manager.Name() == "winget" {
+		if patch.Identifier != "" {
 			key = patch.Identifier
 		}
 		if key != "" {
@@ -75,8 +82,39 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 		output, runErr := command.CombinedOutput()
 		return truncate(string(output), 1_048_576), exitCode(runErr), runErr
 	case "winget":
-		var output strings.Builder
+		// Entries merged in from Windows Update (see entriesToUpdates,
+		// windowsupdatetable.go) are identified by a KB number, not a real
+		// winget package ID -- "winget upgrade --id KB5034123" would just
+		// fail, since they aren't in winget's catalog at all. Those go
+		// through the same COM-API installer WindowsUpdateOnly uses when
+		// winget is absent; everything else is a real winget package,
+		// installed by ID as before.
+		var kbApproved, appApproved []model.ApprovedUpdate
 		for _, patch := range approved {
+			if strings.HasPrefix(patch.Package, "KB") {
+				kbApproved = append(kbApproved, patch)
+			} else {
+				appApproved = append(appApproved, patch)
+			}
+		}
+		var output strings.Builder
+		if len(kbApproved) > 0 {
+			kbAvailable := 0
+			for key := range available {
+				if strings.HasPrefix(key, "KB") {
+					kbAvailable++
+				}
+			}
+			if kbAvailable != len(kbApproved) {
+				return "", -1, fmt.Errorf("every pending Windows Update patch must be approved together")
+			}
+			kbOutput, _, kbErr := installPendingWindowsUpdates(ctx)
+			output.WriteString("Windows Update:\n" + kbOutput + "\n")
+			if kbErr != nil {
+				return truncate(output.String(), 1_048_576), exitCode(kbErr), kbErr
+			}
+		}
+		for _, patch := range appApproved {
 			command := exec.CommandContext(ctx, "winget", "upgrade", "--id", patch.Package,
 				"--exact", "--version", patch.Version, "--accept-source-agreements",
 				"--accept-package-agreements", "--silent", "--disable-interactivity")
@@ -87,6 +125,14 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 			}
 		}
 		return truncate(output.String(), 1_048_576), 0, nil
+	case "windows-update":
+		// No app-package granularity at all here (no winget), just the OS
+		// patch list -- same all-or-nothing shape as pacman, since
+		// InstallUpdates() installs everything pending in one COM-API call.
+		if len(available) != len(wanted) {
+			return "", -1, fmt.Errorf("every pending Windows Update patch must be approved together")
+		}
+		return manager.InstallUpdates()
 	default:
 		return "", -1, fmt.Errorf("approved patch deployment unsupported for %q", manager.Name())
 	}

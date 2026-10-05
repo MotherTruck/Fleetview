@@ -65,6 +65,20 @@ func parseWindowsUpdateEntries(output []byte) ([]WindowsUpdateEntry, error) {
 
 // entriesToUpdates adapts WindowsUpdateEntry values into model.Update
 // values for Winget.Updates's merged update list.
+//
+// Identifier is set to the KB number when there is one: the server's
+// patch-approval view (server-rs/src/deployment.rs's patch_key) only
+// tracks an update under a "safe" identifier -- letters, digits, and a
+// few punctuation characters, no spaces or parentheses -- falling back to
+// the free-text Package name when there's no Identifier. This package
+// name ("Windows Update: <title> (<KB>)") fails that check, so without a
+// clean Identifier these entries were being silently dropped from the
+// approval view entirely rather than just showing as unsupported. KB is
+// already alphanumeric ("KB5034123"), so it passes, and it also gives
+// InstallApproved (approved.go) a stable way to recognize "this approved
+// item is an OS Windows Update entry, not a winget package" -- needed on
+// a device that has winget, since "winget upgrade --all" never installs
+// these (they aren't in winget's catalog at all).
 func entriesToUpdates(entries []WindowsUpdateEntry) []model.Update {
 	result := make([]model.Update, 0, len(entries))
 	for _, entry := range entries {
@@ -76,6 +90,7 @@ func entriesToUpdates(entries []WindowsUpdateEntry) []model.Update {
 		rebootLikely := true
 		result = append(result, model.Update{
 			Package:          packageName,
+			Identifier:       entry.KB,
 			AvailableVersion: entry.KB,
 			SecurityUpdate:   &security,
 			RebootRequired:   &rebootLikely,

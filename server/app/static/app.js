@@ -1111,7 +1111,7 @@ function renderPatching() {
         <div class="device-actions">
           <button class="secondary" data-action="details" data-tab="patches" data-device-id="${escapeHtml(device.id)}">Review</button>
           <button data-action="scan" data-device-id="${escapeHtml(device.id)}">Patch scan</button>
-          <button data-action="vulnerability-scan" data-device-id="${escapeHtml(device.id)}" ${["pacman", "apt"].includes(device.package_manager) ? "" : 'disabled title="The vulnerability adapter for this platform is not available yet"'}>Vulnerability scan</button>
+          <button data-action="vulnerability-scan" data-device-id="${escapeHtml(device.id)}" ${["pacman", "apt", "winget", "windows-update"].includes(device.package_manager) ? "" : 'disabled title="The vulnerability adapter for this platform is not available yet"'}>Vulnerability scan</button>
           <button class="danger" data-action="update" data-device-id="${escapeHtml(device.id)}" ${device.update_count === 0 ? "disabled" : ""}>Deploy approved patches</button>
         </div>
         <p class="scan-note">Patch scan: ${relativeTime(device.last_scan_at)} · Vulnerability scan: ${relativeTime(device.last_vulnerability_scan_at)}</p>
@@ -1865,7 +1865,7 @@ function renderDeviceDetails() {
     $("#detailTableBody").innerHTML = visible.length ? visible.map((item) => {
       const key = item.identifier || item.package;
       const decision = decisions.get(`${key}\u0000${item.available_version}`);
-      return `<tr><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.available_version)}</code></td><td>${flagLabel(item.security_update)}</td><td>${flagLabel(item.reboot_required)}</td><td>${device.package_manager === "winget" && !item.identifier || decision?.supported === false ? "Unsupported Windows update" : `<button type="button" class="secondary" data-approve-patch="${escapeHtml(key)}" data-patch-version="${escapeHtml(item.available_version)}" ${state.user?.role === "viewer" ? "disabled" : ""}>${decision?.approved ? "Approved · revoke" : "Not approved · approve"}</button>`}</td></tr>`;
+      return `<tr><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.available_version)}</code></td><td>${flagLabel(item.security_update)}</td><td>${flagLabel(item.reboot_required)}</td><td>${decision?.supported === false ? "Unsupported Windows update" : `<button type="button" class="secondary" data-approve-patch="${escapeHtml(key)}" data-patch-version="${escapeHtml(item.available_version)}" ${state.user?.role === "viewer" ? "disabled" : ""}>${decision?.approved ? "Approved · revoke" : "Not approved · approve"}</button>`}</td></tr>`;
     }).join("") : '<tr><td colspan="6" class="empty">No needed patches match this view.</td></tr>';
     const schedule = state.patchSchedules[device.id];
     $("#patchInterval").value = schedule?.interval_hours ?? 0;
@@ -1874,9 +1874,11 @@ function renderDeviceDetails() {
     $("#approveAllPatches").disabled = state.user?.role === "viewer" || !approvals.some(item => !item.approved && item.supported);
     $("#patchScheduleForm").querySelector("button").disabled = state.user?.role === "viewer";
     $("#patchInterval").disabled = state.user?.role === "viewer";
-    $("#detailFootnote").textContent = device.package_manager === "pacman"
-      ? "Arch requires approval of all pending patches before a full system upgrade. Partial upgrades are blocked."
-      : "New versions need fresh approval after a scan. Debian checks the transaction for unapproved dependencies. Windows Update entries without winget IDs cannot be deployed here.";
+    $("#detailFootnote").textContent = device.package_manager === "pacman" || device.package_manager === "windows-update"
+      ? "This device requires approval of every pending patch before they can be installed. Partial installs are blocked."
+      : device.package_manager === "winget"
+      ? "New versions need fresh approval after a scan. Windows Update entries (identified by KB number) require approval of every pending one together; winget app updates can be approved individually."
+      : "New versions need fresh approval after a scan. Debian checks the transaction for unapproved dependencies.";
   } else if (state.detailTab === "vulnerabilities") {
     $("#detailTableHead").innerHTML = "<tr><th>Severity</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed version</th><th>Status</th><th>Exposure</th></tr>";
     $("#detailTableBody").innerHTML = visible.length ? visible.map((item) => {
@@ -2041,8 +2043,8 @@ async function queueUpdate(deviceId) {
     state.patchApprovals[deviceId] = patches;
     const selected = patches.filter(patch => patch.approved && patch.supported);
     if (!selected.length) { showNotice("Review this device's needed patches and approve at least one first.", true); openDeviceDetails(deviceId, "patches"); return; }
-    if (device.package_manager === "pacman" && selected.length !== patches.length) {
-      showNotice("Arch requires approval of every pending patch before a full upgrade.", true); openDeviceDetails(deviceId, "patches"); return;
+    if ((device.package_manager === "pacman" || device.package_manager === "windows-update") && selected.length !== patches.length) {
+      showNotice("This device requires approval of every pending patch before they can be installed.", true); openDeviceDetails(deviceId, "patches"); return;
     }
     if (!confirm(`Deploy ${selected.length} approved patch${selected.length === 1 ? "" : "es"} to ${device.hostname}?\n\n${selected.map(item => `${item.package}: ${item.available_version}`).join("\n")}\n\nThe agent checks versions again before changing software.`)) return;
     await api(`/api/v1/admin/devices/${deviceId}/deploy-approved-patches`, { method: "POST" });

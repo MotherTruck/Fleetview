@@ -33,6 +33,9 @@ func TestParseWindowsUpdateSearchSingleObject(t *testing.T) {
 	if u.AvailableVersion != "KB5034123" {
 		t.Fatalf("unexpected available version: %q", u.AvailableVersion)
 	}
+	if u.Identifier != "KB5034123" {
+		t.Fatalf("expected Identifier to be the KB number so the server's approval view doesn't drop this entry (its free-text Package name contains spaces/parens), got %q", u.Identifier)
+	}
 	if u.SecurityUpdate == nil || !*u.SecurityUpdate {
 		t.Fatalf("expected SecurityUpdate=true, got %#v", u.SecurityUpdate)
 	}
@@ -52,6 +55,12 @@ func TestParseWindowsUpdateSearchArray(t *testing.T) {
 	}
 	if updates[0].Package != "Windows Update: Feature update" {
 		t.Fatalf("unexpected first package name: %q", updates[0].Package)
+	}
+	if updates[0].Identifier != "" {
+		t.Fatalf("expected no Identifier for a KB-less entry, got %q", updates[0].Identifier)
+	}
+	if updates[1].Identifier != "KB1111111" {
+		t.Fatalf("expected Identifier to be the KB number, got %q", updates[1].Identifier)
 	}
 	if updates[0].SecurityUpdate == nil || *updates[0].SecurityUpdate {
 		t.Fatalf("expected first update to not be flagged security, got %#v", updates[0].SecurityUpdate)

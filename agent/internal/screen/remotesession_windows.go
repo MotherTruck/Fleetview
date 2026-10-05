@@ -217,9 +217,18 @@ func launchHelper(primaryToken windows.Token, sessionID uint32, framePipeName, i
 		Cb:      uint32(unsafe.Sizeof(windows.StartupInfo{})),
 		Desktop: desktopPtr,
 	}
+	// CREATE_NO_WINDOW, not CREATE_NEW_CONSOLE: the helper is a plain
+	// console-subsystem Go binary (the agent isn't built with
+	// -H=windowsgui), so it still needs a console allocated to run at
+	// all, but CREATE_NEW_CONSOLE made that console a real visible
+	// window on the user's desktop -- and closing it delivered
+	// CTRL_CLOSE_EVENT, which Go's default console handler treats as a
+	// request to exit, killing the helper and ending the remote-control
+	// session right along with it. CREATE_NO_WINDOW allocates the same
+	// console the process needs, just never shown.
 	var procInfo windows.ProcessInformation
 	err = windows.CreateProcessAsUser(primaryToken, nil, cmdLinePtr, nil, nil, false,
-		windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_NEW_CONSOLE, envBlock, nil, startupInfo, &procInfo)
+		windows.CREATE_UNICODE_ENVIRONMENT|windows.CREATE_NO_WINDOW, envBlock, nil, startupInfo, &procInfo)
 	if err != nil {
 		return 0, fmt.Errorf("launch screen helper in session %d: %w", sessionID, err)
 	}
