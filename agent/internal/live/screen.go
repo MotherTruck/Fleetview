@@ -13,7 +13,23 @@ import (
 // screenshot streamed over the same JSON-and-binary WebSocket the terminal
 // uses, not a video codec. A few frames a second is enough to be usable
 // over a home LAN without meaningfully loading a modest endpoint.
-const screenFrameInterval = 250 * time.Millisecond
+//
+// Both this and maxConsecutiveCaptureFailures below are vars, not consts,
+// purely so a test can shrink them -- the real values are otherwise fixed.
+var screenFrameInterval = 250 * time.Millisecond
+
+// maxConsecutiveCaptureFailures bounds how many back-to-back capture
+// failures the loop tolerates before giving up on the session entirely.
+// A single failed frame is often just a transient blip -- on Windows, a
+// UAC consent prompt (or a lock-screen transition) briefly switches the
+// active desktop away from the one being captured, which fails exactly
+// one BitBlt before returning to normal -- and treating that as fatal
+// used to tear down the whole remote-control session over it, with no
+// way to recover short of starting a brand new session from the
+// dashboard. At 250ms per tick, 20 consecutive failures is ~5 seconds of
+// sustained failure, comfortably longer than a prompt's render/dismiss
+// transition but still well short of "this session is actually dead."
+var maxConsecutiveCaptureFailures = 20
 
 // screenHandler manages at most one active remote-control session at a
 // time, the same single-session-per-device model terminalHandler already
@@ -66,12 +82,22 @@ func (s *screenHandler) start(session string) {
 
 func (s *screenHandler) captureLoop(ctx context.Context, session string, capture screen.Session) {
 	lastWidth, lastHeight := -1, -1
+	consecutiveFailures := 0
 	ticker := time.NewTicker(screenFrameInterval)
 	defer ticker.Stop()
 	for {
 		frame, width, height, err := capture.Capture(ctx)
 		if err != nil {
-			s.logger.Printf("remote control: capture failed: %v", err)
+			consecutiveFailures++
+			s.logger.Printf("remote control: capture failed (%d consecutive): %v", consecutiveFailures, err)
+			if consecutiveFailures < maxConsecutiveCaptureFailures {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
 			s.send(screenClosedMessage{Type: "screen_closed", Session: session, Reason: "capture failed: " + err.Error()})
 			s.mu.Lock()
 			if s.session == session {
@@ -80,6 +106,7 @@ func (s *screenHandler) captureLoop(ctx context.Context, session string, capture
 			s.mu.Unlock()
 			return
 		}
+		consecutiveFailures = 0
 		if width != lastWidth || height != lastHeight {
 			s.send(screenInfoMessage{Type: "screen_info", Session: session, Width: width, Height: height})
 			lastWidth, lastHeight = width, height

@@ -80,13 +80,13 @@ func currentSessionID() (uint32, error) {
 // LazyDLL/LazyProc pair per call, with struct layouts following the
 // documented Win32 ABI (stable across Windows versions).
 var (
-	modgdi32                = windows.NewLazySystemDLL("gdi32.dll")
-	moduser32               = windows.NewLazySystemDLL("user32.dll")
-	modkernel32             = windows.NewLazySystemDLL("kernel32.dll")
-	procGetDC               = moduser32.NewProc("GetDC")
-	procReleaseDC           = moduser32.NewProc("ReleaseDC")
-	procGetSystemMetrics    = moduser32.NewProc("GetSystemMetrics")
-	procSendInput           = moduser32.NewProc("SendInput")
+	modgdi32             = windows.NewLazySystemDLL("gdi32.dll")
+	moduser32            = windows.NewLazySystemDLL("user32.dll")
+	modkernel32          = windows.NewLazySystemDLL("kernel32.dll")
+	procGetDC            = moduser32.NewProc("GetDC")
+	procReleaseDC        = moduser32.NewProc("ReleaseDC")
+	procGetSystemMetrics = moduser32.NewProc("GetSystemMetrics")
+	procSendInput        = moduser32.NewProc("SendInput")
 	// WTSGetActiveConsoleSessionId shares the WTS prefix with the Terminal
 	// Services API (wtsapi32.dll) but is actually a kernel32.dll export --
 	// confirmed the hard way: the user32.dll binding this had originally
@@ -103,10 +103,10 @@ var (
 )
 
 const (
-	smCXScreen = 0
-	smCYScreen = 1
-	srcCopy    = 0x00CC0020
-	biRGB      = 0
+	smCXScreen   = 0
+	smCYScreen   = 1
+	srcCopy      = 0x00CC0020
+	biRGB        = 0
 	dibRGBColors = 0
 )
 
@@ -280,18 +280,18 @@ const (
 	inputMouse    = 0
 	inputKeyboard = 1
 
-	mouseEventFMove     = 0x0001
-	mouseEventFAbsolute = 0x8000
-	mouseEventFLeftDown = 0x0002
-	mouseEventFLeftUp   = 0x0004
-	mouseEventFRightDown = 0x0008
-	mouseEventFRightUp   = 0x0010
+	mouseEventFMove       = 0x0001
+	mouseEventFAbsolute   = 0x8000
+	mouseEventFLeftDown   = 0x0002
+	mouseEventFLeftUp     = 0x0004
+	mouseEventFRightDown  = 0x0008
+	mouseEventFRightUp    = 0x0010
 	mouseEventFMiddleDown = 0x0020
 	mouseEventFMiddleUp   = 0x0040
 	mouseEventFWheel      = 0x0800
 
-	keyEventFKeyUp    = 0x0002
-	keyEventFUnicode  = 0x0004
+	keyEventFKeyUp   = 0x0002
+	keyEventFUnicode = 0x0004
 )
 
 func sendInput(pointer unsafe.Pointer, size uintptr) error {

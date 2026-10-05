@@ -112,4 +112,3 @@ func runInputLoop(pipe *os.File, session Session) error {
 		applyInput(session, msgType, payload)
 	}
 }
-

@@ -21,7 +21,9 @@ type windowsApprovalManager struct {
 
 func (m *windowsApprovalManager) Name() string                                       { return m.name }
 func (m *windowsApprovalManager) Installed(context.Context) ([]model.Package, error) { return nil, nil }
-func (m *windowsApprovalManager) Updates(context.Context) ([]model.Update, error)    { return m.updates, nil }
+func (m *windowsApprovalManager) Updates(context.Context) ([]model.Update, error) {
+	return m.updates, nil
+}
 func (m *windowsApprovalManager) InstallUpdates() (string, int, error) {
 	m.installCalled = true
 	return m.installResult, 0, nil

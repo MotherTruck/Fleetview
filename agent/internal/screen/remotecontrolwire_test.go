@@ -9,8 +9,8 @@ import (
 // fakeSession records what was called on it, so applyInput's decoding can
 // be checked without any real screen/input backend.
 type fakeSession struct {
-	moves    [][2]float64
-	buttons  []struct {
+	moves   [][2]float64
+	buttons []struct {
 		x, y    float64
 		button  string
 		pressed bool
