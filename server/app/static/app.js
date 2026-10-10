@@ -9,6 +9,7 @@ const state = {
   detailDevice: null,
   detailTab: "overview",
   detailHistory: [],
+  detailContainerHistory: [],
   detailHistoryLoading: false,
   agentOptionsSignature: "",
   enrollmentTokens: [],
@@ -1396,15 +1397,32 @@ function renderComplianceTrends() {
   }
   const latest = history[history.length - 1];
   const dateRange = `${latest.date === history[0].date ? "" : `${history[0].date} – `}${latest.date}`;
+  const timestamps = history.map((day) => day.date);
+  const vulnMax = Math.max(1, ...history.map((day) => Number(day.total_vulnerabilities) || 0));
   container.innerHTML = `
     <p class="form-note">${history.length} reporting days (${escapeHtml(dateRange)}). Scope: ${escapeHtml($("#trendDevice").selectedOptions[0]?.textContent || "Entire fleet")}. Each device contributes its first report of that UTC day; missing days are not zeroes. Summary cards above remain fleet-wide.</p>
     <div class="chart-grid-wrap">
-      ${lineChart("Fully patched", `${latest.fully_patched_percent}%`, history, (day) => day.fully_patched_percent, 100, "chart-green")}
-      ${lineChart("No critical/high vulnerabilities", `${latest.no_critical_high_percent}%`, history, (day) => day.no_critical_high_percent, 100, "chart-blue")}
-      ${lineChart("Online", `${latest.online_percent}%`, history, (day) => day.online_percent, 100, "chart-green")}
-      ${lineChart("Vulnerabilities", `${latest.total_vulnerabilities}`, history, (day) => day.total_vulnerabilities, null, "chart-orange")}
+      ${renderAreaChartCard({
+        title: "Fully patched", valueLabel: formatPercent(latest.fully_patched_percent), timestamps, xFormat: shortDate,
+        series: [{ name: "Fully patched", values: history.map((d) => d.fully_patched_percent) }], yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "No critical/high vulnerabilities", valueLabel: formatPercent(latest.no_critical_high_percent), timestamps, xFormat: shortDate,
+        series: [{ name: "Clear of critical/high", color: "#67b7f7", gradient: "chartGradBlue", values: history.map((d) => d.no_critical_high_percent) }],
+        yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "Online", valueLabel: formatPercent(latest.online_percent), timestamps, xFormat: shortDate,
+        series: [{ name: "Online", values: history.map((d) => d.online_percent) }], yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "Vulnerabilities", valueLabel: String(latest.total_vulnerabilities), timestamps, xFormat: shortDate,
+        series: [{ name: "Vulnerabilities", color: "#f3aa63", gradient: "chartGradOrange", values: history.map((d) => d.total_vulnerabilities) }],
+        yMax: vulnMax, yFormat: (v) => String(Math.round(v)),
+      })}
     </div>
   `;
+  attachAllChartHovers(container);
 }
 
 function renderComplianceSummary() {
@@ -1585,36 +1603,221 @@ function render() {
   applyPermissions();
 }
 
-function chartPoints(samples, valueFunction, width = 640, height = 130, fixedMax = null) {
-  const values = samples.map((sample) => Number(valueFunction(sample))).map((value) => Number.isFinite(value) ? Math.max(0, value) : 0);
-  if (!values.length) return { points: "", max: 0 };
-  const maximum = fixedMax || Math.max(...values, 1);
-  const points = values.map((value, index) => {
-    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
-    const y = height - (Math.min(value, maximum) / maximum) * (height - 8) - 4;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  return { points, max: maximum };
+// ---- Area chart engine (CPU/memory/disk/network/Docker history) ----
+//
+// Filled-gradient area charts with a shared hover crosshair+tooltip and,
+// for multi-series (Docker) charts, stacking and a legend/filter -- see
+// the dataviz skill's mark specs (2px line, ~10-55% gradient wash, legend
+// for 2+ series, crosshair-driven tooltip) this was built against.
+//
+// Each chart gets a generated id (chart-N) used only to look its own
+// series data back up in chartRegistry for the shared hover handler --
+// never embedded as anything but an opaque attribute value.
+let chartSeq = 0;
+const chartRegistry = new Map();
+let chartTooltipEl = null;
+
+function shortTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function lineChart(title, currentLabel, samples, valueFunction, fixedMax = null, colorClass = "chart-green") {
-  const series = chartPoints(samples, valueFunction, 640, 130, fixedMax);
-  return `<article class="chart-card">
-    <div class="chart-title"><div><small>${escapeHtml(title)}</small><strong>${escapeHtml(currentLabel)}</strong></div><span>${samples.length} samples</span></div>
-    <svg viewBox="0 0 640 130" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)} history">
-      <line x1="0" y1="126" x2="640" y2="126" class="chart-grid"></line>
-      <line x1="0" y1="65" x2="640" y2="65" class="chart-grid"></line>
-      <polyline points="${series.points}" class="chart-line ${colorClass}"></polyline>
-    </svg>
+function shortDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// formatBytes treats 0 as "no data reported" (correct for a device's own
+// current-usage display, where 0 really does mean unknown). A chart axis
+// has no such ambiguity -- 0 is just the origin -- so this keeps
+// formatBytes' unit scaling but renders zero as "0 B" instead.
+function formatBytesAxis(value) {
+  return Number(value) > 0 ? formatBytes(value) : "0 B";
+}
+
+const CATEGORICAL_GRADIENTS = ["chartGradCat0", "chartGradCat1", "chartGradCat2", "chartGradCat3", "chartGradCat4", "chartGradCat5", "chartGradCat6", "chartGradCat7"];
+const CATEGORICAL_HEX = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#4caf4c", "#9085e9", "#e66767"];
+
+function renderAreaChartCard({ title, valueLabel, note, timestamps, series, yMax, yFormat = (v) => String(Math.round(v)), xFormat = shortTime, stacked = false, filterable = false }) {
+  const chartId = `chart-${++chartSeq}`;
+  const width = 640, height = 170, padBottom = 24, plotH = height - padBottom;
+  const n = timestamps.length;
+  const xAt = (i) => (n <= 1 ? width / 2 : (i / (n - 1)) * width);
+  const maxValue = Math.max(yMax || 0, 1);
+  const yOf = (v) => plotH - (Math.max(0, Math.min(v, maxValue)) / maxValue) * plotH;
+
+  let cumulative = new Array(n).fill(0);
+  const bands = series.map((s, seriesIndex) => {
+    const safeValues = Array.from({ length: n }, (_, i) => Number(s.values[i]) || 0);
+    const bottomValues = cumulative.slice();
+    const topValues = stacked ? cumulative.map((c, i) => c + safeValues[i]) : safeValues;
+    if (stacked) cumulative = topValues;
+    const topPoints = topValues.map((v, i) => [xAt(i), yOf(v)]);
+    const bottomPoints = stacked ? bottomValues.map((v, i) => [xAt(i), yOf(v)]) : topValues.map((_, i) => [xAt(i), plotH]);
+    const pathTop = topPoints.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const pathBottom = bottomPoints.slice().reverse().map(([x, y]) => `L${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const areaD = n ? `${pathTop} ${pathBottom} Z` : "";
+    const lineD = pathTop;
+    const gradient = s.gradient || (stacked || series.length > 1 ? CATEGORICAL_GRADIENTS[seriesIndex % CATEGORICAL_GRADIENTS.length] : "chartGradGreen");
+    const color = s.color || (stacked || series.length > 1 ? CATEGORICAL_HEX[seriesIndex % CATEGORICAL_HEX.length] : "var(--accent)");
+    return { name: s.name, color, gradient, areaD, lineD, values: safeValues, topPoints };
+  });
+
+  chartRegistry.set(chartId, { timestamps, series: bands, maxValue, plotH, width, yFormat, stacked });
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => ({ y: plotH - f * plotH, label: yFormat(maxValue * f) }));
+  const xTickCount = Math.min(5, n);
+  const xTicks = n ? Array.from({ length: xTickCount }, (_, i) => {
+    const idx = xTickCount === 1 ? 0 : Math.round((i / (xTickCount - 1)) * (n - 1));
+    return { x: xAt(idx), label: xFormat(timestamps[idx]) };
+  }) : [];
+
+  const legend = series.length >= 2 ? `<div class="chart-legend">${bands.map((b, i) =>
+    `<span class="chart-legend-item" data-chart-id="${chartId}" data-series="${i}"><span class="chart-swatch" style="background:${b.color}"></span>${escapeHtml(b.name)}</span>`
+  ).join("")}</div>` : "";
+  const filter = filterable && series.length >= 2
+    ? `<input type="search" class="chart-filter" placeholder="Filter…" data-chart-id="${chartId}" aria-label="Filter ${escapeHtml(title)} series">`
+    : "";
+
+  return `<article class="chart-card ${series.length >= 2 ? "chart-card-wide" : ""}">
+    <div class="chart-title">
+      <div><small>${escapeHtml(title)}</small><strong>${escapeHtml(valueLabel)}</strong></div>
+      ${filter || `<span>${n} sample${n === 1 ? "" : "s"}</span>`}
+    </div>
+    <div class="chart-plot">
+      <div class="chart-axis-y">${yTicks.map((t) => `<span style="top:${((t.y / plotH) * 100).toFixed(2)}%">${escapeHtml(t.label)}</span>`).join("")}</div>
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(title)} history" data-chart-id="${chartId}">
+        ${yTicks.map((t) => `<line x1="0" y1="${t.y.toFixed(1)}" x2="${width}" y2="${t.y.toFixed(1)}" class="chart-grid"></line>`).join("")}
+        ${bands.map((b) => `<path d="${b.areaD}" fill="url(#${b.gradient})" class="chart-area" data-series-name="${escapeHtml(b.name)}"></path>`).join("")}
+        ${bands.map((b) => `<path d="${b.lineD}" fill="none" stroke="${b.color}" class="chart-line-path" data-series-name="${escapeHtml(b.name)}"></path>`).join("")}
+        <g class="chart-crosshair" data-crosshair="${chartId}" opacity="0">
+          <line x1="0" y1="0" x2="0" y2="${plotH}" class="chart-crosshair-line"></line>
+        </g>
+        <rect x="0" y="0" width="${width}" height="${plotH}" fill="transparent" class="chart-hit-area" data-chart-hit="${chartId}"></rect>
+      </svg>
+    </div>
+    <div class="chart-axis-x">${xTicks.map((t) => `<span style="left:${((t.x / width) * 100).toFixed(2)}%">${escapeHtml(t.label)}</span>`).join("")}</div>
+    ${legend}
+    ${note ? `<p class="chart-note">${escapeHtml(note)}</p>` : ""}
   </article>`;
 }
 
-function renderMonitoring(device) {
-  const container = $("#monitoringContent");
-  if (state.detailHistoryLoading) {
-    container.innerHTML = '<div class="empty">Loading monitoring history…</div>';
-    return;
+function ensureChartTooltip() {
+  if (chartTooltipEl) return chartTooltipEl;
+  chartTooltipEl = document.createElement("div");
+  chartTooltipEl.className = "chart-tooltip";
+  chartTooltipEl.hidden = true;
+  document.body.appendChild(chartTooltipEl);
+  return chartTooltipEl;
+}
+
+function showChartTooltip(pageX, pageY, timeLabel, rows) {
+  const tooltip = ensureChartTooltip();
+  tooltip.innerHTML = "";
+  const time = document.createElement("div");
+  time.className = "chart-tooltip-time";
+  time.textContent = timeLabel;
+  tooltip.appendChild(time);
+  for (const row of rows) {
+    const line = document.createElement("div");
+    line.className = "chart-tooltip-row";
+    const key = document.createElement("span");
+    key.className = "chart-tooltip-key";
+    key.style.background = row.color;
+    const name = document.createElement("span");
+    name.className = "chart-tooltip-name";
+    name.textContent = row.name;
+    const value = document.createElement("strong");
+    value.className = "chart-tooltip-value";
+    value.textContent = row.value;
+    line.append(key, name, value);
+    tooltip.appendChild(line);
   }
+  tooltip.hidden = false;
+  const offset = 14;
+  let left = pageX + offset;
+  let top = pageY + offset;
+  const rect = tooltip.getBoundingClientRect();
+  if (left + rect.width > window.innerWidth + window.scrollX) left = pageX - rect.width - offset;
+  if (top + rect.height > window.innerHeight + window.scrollY) top = pageY - rect.height - offset;
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+}
+
+function hideChartTooltip() {
+  if (chartTooltipEl) chartTooltipEl.hidden = true;
+}
+
+function nearestIndex(timestamps, width, offsetX) {
+  if (!timestamps.length) return -1;
+  if (timestamps.length === 1) return 0;
+  const fraction = Math.max(0, Math.min(1, offsetX / width));
+  return Math.round(fraction * (timestamps.length - 1));
+}
+
+function attachChartHover(svg) {
+  const chartId = svg.dataset.chartId;
+  const hitArea = svg.querySelector("[data-chart-hit]");
+  const crosshair = svg.querySelector("[data-crosshair]");
+  if (!hitArea || !crosshair) return;
+  const move = (event) => {
+    const data = chartRegistry.get(chartId);
+    if (!data || !data.timestamps.length) return;
+    const bounds = svg.getBoundingClientRect();
+    const offsetX = ((event.clientX - bounds.left) / bounds.width) * data.width;
+    const index = nearestIndex(data.timestamps, data.width, offsetX);
+    if (index < 0) return;
+    const x = data.series[0]?.topPoints[index]?.[0] ?? offsetX;
+    crosshair.setAttribute("opacity", "1");
+    crosshair.querySelector("line").setAttribute("x1", x.toFixed(1));
+    crosshair.querySelector("line").setAttribute("x2", x.toFixed(1));
+    const rows = data.series
+      .map((s) => ({ name: s.name, color: s.color, raw: s.values[index], value: data.yFormat(s.values[index]) }))
+      .filter((row) => !data.stacked || row.raw > 0 || data.series.length <= 4);
+    showChartTooltip(event.pageX, event.pageY, fullDate(data.timestamps[index]), rows);
+  };
+  hitArea.addEventListener("pointermove", move);
+  hitArea.addEventListener("pointerleave", () => {
+    crosshair.setAttribute("opacity", "0");
+    hideChartTooltip();
+  });
+}
+
+function attachAllChartHovers(container) {
+  container.querySelectorAll("svg[data-chart-id]").forEach(attachChartHover);
+  container.querySelectorAll(".chart-filter").forEach((input) => {
+    input.addEventListener("input", () => {
+      const chartId = input.dataset.chartId;
+      const query = input.value.trim().toLowerCase();
+      const svg = container.querySelector(`svg[data-chart-id="${chartId}"]`);
+      if (!svg) return;
+      const matches = (name) => !query || name.toLowerCase().includes(query);
+      svg.querySelectorAll("[data-series-name]").forEach((el) => {
+        el.style.opacity = matches(el.dataset.seriesName) ? "" : ".12";
+      });
+      const legend = svg.closest(".chart-card")?.querySelector(".chart-legend");
+      legend?.querySelectorAll(".chart-legend-item").forEach((item) => {
+        const name = item.textContent.trim();
+        item.style.opacity = matches(name) ? "" : ".4";
+      });
+    });
+  });
+}
+
+// renderMonitoring is split in two: the live snapshot (current-metrics,
+// GPU, top consumers) re-renders on every live-metrics WS tick, but the
+// historical area charts below it only actually change when
+// loadMetricHistory/loadContainerMetricHistory refetch (a new time range,
+// or opening the tab) -- rebuilding their SVGs every tick as part of one
+// big innerHTML would tear down and reattach the hover listeners
+// constantly and make the tooltip unusable while live data streams in.
+function renderMonitoring(device) {
+  renderMonitoringLive(device);
+  renderMonitoringCharts(device);
+}
+
+function renderMonitoringLive(device) {
+  const container = $("#monitoringLive");
   const live = state.liveMetricsByDevice.get(device.id);
   const metrics = live || device.metrics;
   if (!metrics) {
@@ -1626,18 +1829,10 @@ function renderMonitoring(device) {
     : state.liveDeviceIds.has(device.id)
       ? '<span class="pill pending">Connecting…</span>'
       : '<span class="pill severity-unknown">Not live (showing last reported sample)</span>';
-  const samples = state.detailHistory;
   const memory = usagePercent(metrics.memory_used_bytes, metrics.memory_total_bytes);
   const disk = usagePercent(metrics.disk_used_bytes, metrics.disk_total_bytes);
   const swap = usagePercent(metrics.swap_used_bytes, metrics.swap_total_bytes);
   const temperature = metrics.temperature_celsius === null || metrics.temperature_celsius === undefined ? "Not reported" : `${Number(metrics.temperature_celsius).toFixed(1)}°C`;
-  const memoryValue = (sample) => usagePercent(sample.memory_used_bytes, sample.memory_total_bytes) || 0;
-  const diskValue = (sample) => usagePercent(sample.disk_used_bytes, sample.disk_total_bytes) || 0;
-  const networkMax = Math.max(...samples.flatMap((sample) => [Number(sample.network_receive_bps) || 0, Number(sample.network_transmit_bps) || 0]), 1);
-  const receiveSeries = chartPoints(samples, (sample) => sample.network_receive_bps, 640, 130, networkMax);
-  const transmitSeries = chartPoints(samples, (sample) => sample.network_transmit_bps, 640, 130, networkMax);
-  const historyStart = samples.length ? fullDate(samples[0].recorded_at) : "Waiting for samples";
-  const historyEnd = samples.length ? fullDate(samples[samples.length - 1].recorded_at) : "Waiting for samples";
   const gpus = Array.isArray(metrics.gpus) ? metrics.gpus : [];
   const gpuCards = gpus.length ? `<section class="gpu-section"><div><p class="eyebrow">GPU MONITORING</p><h3>Graphics processors</h3></div><div class="gpu-grid">${gpus.map((gpu) => {
     const gpuMemory = usagePercent(gpu.memory_used_bytes, gpu.memory_total_bytes);
@@ -1686,20 +1881,121 @@ function renderMonitoring(device) {
       <div><small>Network now</small><strong>↓ ${formatRate(metrics.network_receive_bps)}</strong><span>↑ ${formatRate(metrics.network_transmit_bps)}</span></div>
     </div>
     ${gpuCards}
-    ${topConsumersSection}
+    ${topConsumersSection}`;
+}
+
+// Rebuilt only when the underlying history data actually changes (a new
+// time range, or the tab just opened) -- see renderMonitoring's comment.
+// lastRenderedChartsSignature lets a live-tick-triggered renderMonitoring
+// call skip this safely.
+let lastRenderedChartsSignature = null;
+
+function renderMonitoringCharts(device) {
+  const container = $("#monitoringCharts");
+  if (state.detailHistoryLoading) {
+    container.innerHTML = '<div class="empty">Loading monitoring history…</div>';
+    lastRenderedChartsSignature = null;
+    return;
+  }
+  const samples = state.detailHistory;
+  const containerSamples = state.detailContainerHistory || [];
+  const signature = `${device.id}:${samples.length ? samples[samples.length - 1].recorded_at : ""}:${samples.length}:${containerSamples.length}`;
+  if (signature === lastRenderedChartsSignature) return;
+  lastRenderedChartsSignature = signature;
+
+  const live = state.liveMetricsByDevice.get(device.id);
+  const metrics = live || device.metrics;
+  if (!metrics) {
+    container.innerHTML = "";
+    return;
+  }
+  const memory = usagePercent(metrics.memory_used_bytes, metrics.memory_total_bytes);
+  const disk = usagePercent(metrics.disk_used_bytes, metrics.disk_total_bytes);
+  const timestamps = samples.map((s) => s.recorded_at);
+  const networkMax = Math.max(...samples.flatMap((s) => [Number(s.network_receive_bps) || 0, Number(s.network_transmit_bps) || 0]), 1);
+  const historyStart = samples.length ? fullDate(samples[0].recorded_at) : "Waiting for samples";
+  const historyEnd = samples.length ? fullDate(samples[samples.length - 1].recorded_at) : "Waiting for samples";
+
+  const hostCharts = `
     <div class="chart-grid-wrap">
-      ${lineChart("CPU usage", formatPercent(metrics.cpu_percent), samples, (sample) => sample.cpu_percent, 100)}
-      ${lineChart("Memory usage", formatPercent(memory), samples, memoryValue, 100, "chart-blue")}
-      ${lineChart("Root disk usage", formatPercent(disk), samples, diskValue, 100, "chart-orange")}
-      <article class="chart-card">
-        <div class="chart-title"><div><small>Network throughput</small><strong>↓ ${formatRate(metrics.network_receive_bps)} · ↑ ${formatRate(metrics.network_transmit_bps)}</strong></div><span>${samples.length} samples</span></div>
-        <svg viewBox="0 0 640 130" preserveAspectRatio="none" role="img" aria-label="Network throughput history">
-          <line x1="0" y1="126" x2="640" y2="126" class="chart-grid"></line><line x1="0" y1="65" x2="640" y2="65" class="chart-grid"></line>
-          <polyline points="${receiveSeries.points}" class="chart-line chart-blue"></polyline><polyline points="${transmitSeries.points}" class="chart-line chart-orange"></polyline>
-        </svg>
-      </article>
-    </div>
+      ${renderAreaChartCard({
+        title: "CPU usage", valueLabel: formatPercent(metrics.cpu_percent), timestamps,
+        series: [{ name: "CPU", values: samples.map((s) => s.cpu_percent) }], yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "Memory usage", valueLabel: formatPercent(memory), timestamps,
+        series: [{ name: "Memory", color: "#67b7f7", gradient: "chartGradBlue", values: samples.map((s) => usagePercent(s.memory_used_bytes, s.memory_total_bytes) || 0) }],
+        yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "Root disk usage", valueLabel: formatPercent(disk), timestamps,
+        series: [{ name: "Disk", color: "#f3aa63", gradient: "chartGradOrange", values: samples.map((s) => usagePercent(s.disk_used_bytes, s.disk_total_bytes) || 0) }],
+        yMax: 100, yFormat: formatPercent,
+      })}
+      ${renderAreaChartCard({
+        title: "Network throughput", valueLabel: `↓ ${formatRate(metrics.network_receive_bps)} · ↑ ${formatRate(metrics.network_transmit_bps)}`, timestamps,
+        series: [
+          { name: "Download", color: "#67b7f7", gradient: "chartGradBlue", values: samples.map((s) => s.network_receive_bps) },
+          { name: "Upload", color: "#f3aa63", gradient: "chartGradOrange", values: samples.map((s) => s.network_transmit_bps) },
+        ],
+        yMax: networkMax, yFormat: formatRate,
+      })}
+    </div>`;
+
+  container.innerHTML = `${hostCharts}${renderDockerHistoryCharts(containerSamples)}
     <p class="history-range">History shown: ${escapeHtml(historyStart)} to ${escapeHtml(historyEnd)}. Samples are retained for seven days.</p>`;
+  attachAllChartHovers(container);
+}
+
+// Builds the two stacked-area Docker charts (CPU%, memory) from
+// container_metric_samples rows: grouped by recorded_at (all containers
+// in one periodic report share a timestamp) and by container_name, so
+// each gets its own band. More than 8 containers fold the smallest ones
+// into "Other", matching the categorical palette's 8-slot cap.
+function renderDockerHistoryCharts(rows) {
+  if (!rows.length) {
+    return '<p class="form-note" style="margin-top:14px">No Docker container history yet -- requires agent 0.26.3+ and at least one periodic metrics report with running containers.</p>';
+  }
+  const timestamps = [...new Set(rows.map((r) => r.recorded_at))].sort();
+  const timeIndex = new Map(timestamps.map((t, i) => [t, i]));
+  const totalsByName = new Map();
+  for (const row of rows) totalsByName.set(row.container_name, (totalsByName.get(row.container_name) || 0) + (Number(row.cpu_percent) || 0));
+  const orderedNames = [...totalsByName.keys()].sort((a, b) => totalsByName.get(b) - totalsByName.get(a));
+  const MAX_SERIES = 8;
+  const visibleNames = orderedNames.slice(0, MAX_SERIES);
+  const hasOther = orderedNames.length > MAX_SERIES;
+  const otherNames = new Set(orderedNames.slice(MAX_SERIES));
+
+  const seriesNames = hasOther ? [...visibleNames, "Other"] : visibleNames;
+  const buildSeries = (valueKey) => {
+    const byName = new Map(seriesNames.map((name) => [name, new Array(timestamps.length).fill(0)]));
+    for (const row of rows) {
+      const key = otherNames.has(row.container_name) ? "Other" : row.container_name;
+      const values = byName.get(key);
+      if (!values) continue;
+      values[timeIndex.get(row.recorded_at)] += Number(row[valueKey]) || 0;
+    }
+    return seriesNames.map((name) => ({ name, values: byName.get(name) }));
+  };
+  const stackedMax = (series) => Math.max(1, ...timestamps.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] || 0), 0)));
+
+  const cpuSeries = buildSeries("cpu_percent");
+  const memSeries = buildSeries("memory_bytes");
+  const cpuMax = Math.max(100, stackedMax(cpuSeries));
+  const memMax = stackedMax(memSeries);
+
+  return `<div class="chart-grid-wrap">
+    ${renderAreaChartCard({
+      title: "Docker CPU usage", valueLabel: `${visibleNames.length}${hasOther ? "+" : ""} container${seriesNames.length === 1 ? "" : "s"}`,
+      note: "Average CPU utilization of containers", timestamps, series: cpuSeries,
+      yMax: cpuMax, yFormat: (v) => `${Math.round(v)}%`, stacked: true, filterable: true,
+    })}
+    ${renderAreaChartCard({
+      title: "Docker memory usage", valueLabel: formatBytes(memMax),
+      note: "Memory usage of containers", timestamps, series: memSeries,
+      yMax: memMax, yFormat: formatBytesAxis, stacked: true, filterable: true,
+    })}
+  </div>`;
 }
 
 function renderOverview(device) {
@@ -1900,6 +2196,7 @@ async function openDeviceDetails(deviceId, tab = "overview") {
   state.detailDevice = null;
   state.detailTab = tab;
   state.detailHistory = [];
+  state.detailContainerHistory = [];
   state.detailHistoryLoading = tab === "monitoring";
   $("#detailSearch").value = "";
   $("#detailTitle").textContent = "Loading device…";
@@ -1932,10 +2229,17 @@ async function loadMetricHistory() {
   renderDeviceDetails();
   try {
     const hours = Number($("#metricRange").value) || 24;
-    state.detailHistory = await api(`/api/v1/admin/devices/${state.detailDevice.id}/metrics?hours=${hours}`);
+    const deviceId = state.detailDevice.id;
+    const [metrics, containerMetrics] = await Promise.all([
+      api(`/api/v1/admin/devices/${deviceId}/metrics?hours=${hours}`),
+      api(`/api/v1/admin/devices/${deviceId}/container-metrics?hours=${hours}`),
+    ]);
+    state.detailHistory = metrics;
+    state.detailContainerHistory = containerMetrics;
   } catch (error) {
     showNotice(error.message, true);
     state.detailHistory = [];
+    state.detailContainerHistory = [];
   } finally {
     state.detailHistoryLoading = false;
     renderDeviceDetails();
@@ -2498,7 +2802,7 @@ $("#deviceDialog").addEventListener("click", async (event) => {
   finally { button.disabled = false; }
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
-$("#monitoringContent").addEventListener("click", (event) => {
+$("#monitoringLive").addEventListener("click", (event) => {
   const button = event.target.closest("[data-consumer-sort]");
   if (!button) return;
   state.topConsumersSort = button.dataset.consumerSort;

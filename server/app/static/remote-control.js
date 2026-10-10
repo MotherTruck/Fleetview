@@ -149,6 +149,37 @@ async function main() {
       event.preventDefault();
       send({ type: "mouse_scroll", dx: event.deltaX / 100, dy: event.deltaY / 100 });
     }, { passive: false });
+
+    // Touch has no hover/mousemove, so a single finger is mapped to a left
+    // button drag: touchstart presses down where the finger landed,
+    // touchmove drags, touchend releases. preventDefault throughout stops
+    // the browser from scrolling/pinch-zooming the page instead of
+    // controlling the remote screen.
+    let touchDown = false;
+    stage.addEventListener("touchstart", (event) => {
+      event.preventDefault();
+      stage.focus();
+      const point = pointerFraction(event.touches[0]);
+      if (!point) return;
+      touchDown = true;
+      send({ type: "mouse_move", x: point.x, y: point.y });
+      send({ type: "mouse_button", x: point.x, y: point.y, button: "left", pressed: true });
+    }, { passive: false });
+    stage.addEventListener("touchmove", (event) => {
+      event.preventDefault();
+      if (!touchDown) return;
+      const point = pointerFraction(event.touches[0]);
+      if (point) send({ type: "mouse_move", x: point.x, y: point.y });
+    }, { passive: false });
+    const endTouch = (event) => {
+      event.preventDefault();
+      if (!touchDown) return;
+      touchDown = false;
+      const point = pointerFraction(event.changedTouches[0]);
+      if (point) send({ type: "mouse_button", x: point.x, y: point.y, button: "left", pressed: false });
+    };
+    stage.addEventListener("touchend", endTouch, { passive: false });
+    stage.addEventListener("touchcancel", endTouch, { passive: false });
     stage.addEventListener("keydown", (event) => {
       event.preventDefault();
       send({ type: "key", key: event.key, pressed: true });

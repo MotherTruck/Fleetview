@@ -9,6 +9,40 @@
     <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
   </head>
   <body class="signed-out">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="chartGradGreen" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--accent)" stop-opacity=".32"></stop>
+          <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"></stop>
+        </linearGradient>
+        <linearGradient id="chartGradBlue" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#67b7f7" stop-opacity=".32"></stop>
+          <stop offset="100%" stop-color="#67b7f7" stop-opacity="0"></stop>
+        </linearGradient>
+        <linearGradient id="chartGradOrange" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f3aa63" stop-opacity=".32"></stop>
+          <stop offset="100%" stop-color="#f3aa63" stop-opacity="0"></stop>
+        </linearGradient>
+        <!--
+          Categorical identity set for stacked multi-series charts (Docker
+          container CPU/memory) -- distinct from the three metric colors
+          above, which mean "CPU"/"memory"/"disk" everywhere else in this
+          UI, not "which container". Validated (scripts/validate_palette.js,
+          dataviz skill) against this app's dark chart-card surface: all
+          lightness/chroma/contrast gates pass; worst adjacent CVD pair
+          sits in the 6-8 Delta-E floor band, which is why every series
+          using these also gets a legend swatch + name, never color alone.
+        -->
+        <linearGradient id="chartGradCat0" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3987e5" stop-opacity=".55"></stop><stop offset="100%" stop-color="#3987e5" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d95926" stop-opacity=".55"></stop><stop offset="100%" stop-color="#d95926" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#199e70" stop-opacity=".55"></stop><stop offset="100%" stop-color="#199e70" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat3" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#c98500" stop-opacity=".55"></stop><stop offset="100%" stop-color="#c98500" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat4" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d55181" stop-opacity=".55"></stop><stop offset="100%" stop-color="#d55181" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat5" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4caf4c" stop-opacity=".55"></stop><stop offset="100%" stop-color="#4caf4c" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat6" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9085e9" stop-opacity=".55"></stop><stop offset="100%" stop-color="#9085e9" stop-opacity=".12"></stop></linearGradient>
+        <linearGradient id="chartGradCat7" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e66767" stop-opacity=".55"></stop><stop offset="100%" stop-color="#e66767" stop-opacity=".12"></stop></linearGradient>
+      </defs>
+    </svg>
     <header>
       <div>
         <p class="eyebrow">ENDPOINT MANAGEMENT</p>
@@ -540,7 +574,8 @@ FLEETVIEW_PORT=8080</code></pre>
             </select>
           </label>
         </div>
-        <div id="monitoringContent"></div>
+        <div id="monitoringLive"></div>
+        <div id="monitoringCharts"></div>
       </div>
       <div id="detailTerminal" class="detail-terminal" hidden>
         <div class="terminal-heading">
