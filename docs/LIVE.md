@@ -101,9 +101,14 @@ covers what's specific to screen/input instead of a shell.
   (`apt-get`/`pacman`) the moment the agent notices they're missing --
   every agent startup checks, including the restart a self-upgrade
   triggers, so upgrading the agent is the only step needed. Wayland
-  capture uses `grim` the same way, but Wayland has no portal-based input
-  standard the way X11 has XTEST, so a Wayland session is always
-  **view-only**: you can watch, but clicks and keystrokes aren't sent.
+  capture uses `grim` the same way; Wayland input (there's no
+  portal-based standard for it the way X11 has XTEST) goes through a
+  synthetic `/dev/uinput` device instead, which needs the `uinput` kernel
+  module loaded -- most distros load it automatically the first time
+  something opens the device node, which the agent (running as root) can
+  do without any further setup. A session only falls back to **view-only**
+  if `/dev/uinput` genuinely isn't usable (module not available, device
+  node missing).
   If a tool genuinely can't be installed (no matching package for that
   distro, no network access at that moment), the tab explains exactly
   what's missing rather than just not being there.

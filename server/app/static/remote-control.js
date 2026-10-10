@@ -68,7 +68,7 @@ async function main() {
   const frame = $("#rcFrame");
   stage.dataset.input = String(inputEnabled);
   if (!inputEnabled) {
-    setStatus("Connecting… (view only: no input-capable desktop session, e.g. Wayland without a portal)");
+    setStatus(`Connecting… (view only: ${remoteControl.reason || "no input-capable desktop session"})`);
   } else {
     setStatus("Connecting…");
   }

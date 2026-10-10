@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bendahl/uinput"
 )
 
 // These tests need a real graphical session discoverable via /proc scanning
@@ -196,6 +198,108 @@ func TestKeysymTranslation(t *testing.T) {
 	for input, want := range cases {
 		if got := keysymFor(input); got != want {
 			t.Errorf("keysymFor(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+// requireUinput needs an actual writable /dev/uinput (and the module
+// loaded), which this sandboxed build environment doesn't have -- real
+// device creation is only exercised on a box that actually has one.
+func requireUinput(t *testing.T) {
+	t.Helper()
+	if err := probeUinput(); err != nil {
+		t.Skipf("no usable /dev/uinput: %v", err)
+	}
+}
+
+func TestLinuxKeycodeTranslation(t *testing.T) {
+	cases := []struct {
+		key   string
+		code  int
+		shift bool
+		ok    bool
+	}{
+		{"a", uinput.KeyA, false, true},
+		{"A", uinput.KeyA, true, true},
+		{"1", uinput.Key1, false, true},
+		{"!", uinput.Key1, true, true},
+		{"0", uinput.Key0, false, true},
+		{")", uinput.Key0, true, true},
+		{" ", uinput.KeySpace, false, true},
+		{"Enter", uinput.KeyEnter, false, true},
+		{"ArrowLeft", uinput.KeyLeft, false, true},
+		{"Shift", uinput.KeyLeftshift, false, true},
+		{"UnknownNamedKey", 0, false, false},
+	}
+	for _, c := range cases {
+		code, shift, ok := linuxKeycodeFor(c.key)
+		if ok != c.ok || (ok && (code != c.code || shift != c.shift)) {
+			t.Errorf("linuxKeycodeFor(%q) = (%d, %v, %v), want (%d, %v, %v)", c.key, code, shift, ok, c.code, c.shift, c.ok)
+		}
+	}
+}
+
+func TestScrollClicksClamping(t *testing.T) {
+	cases := map[float64]int{0: 1, 1: 1, -1: 1, 5: 5, -5: 5, 30: 20, -30: 20}
+	for delta, want := range cases {
+		if got := scrollClicks(delta); got != want {
+			t.Errorf("scrollClicks(%v) = %d, want %d", delta, got, want)
+		}
+	}
+}
+
+// TestWaylandInputMethodsRunWithoutError mirrors
+// TestInputMethodsRunWithoutError for a real Wayland session with a usable
+// /dev/uinput -- skipped everywhere else, since there's no way to fake
+// either meaningfully.
+func TestWaylandInputMethodsRunWithoutError(t *testing.T) {
+	if _, ok := findGraphicalSession("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); !ok {
+		t.Skip("no active Wayland session discoverable via /proc scanning")
+	}
+	if _, err := exec.LookPath("grim"); err != nil {
+		t.Skip("grim not installed")
+	}
+	requireUinput(t)
+
+	session, err := NewSession()
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.MouseMove(0.5, 0.25); err != nil {
+		t.Errorf("MouseMove: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "left", true); err != nil {
+		t.Errorf("MouseButton left down: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "left", false); err != nil {
+		t.Errorf("MouseButton left up: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "right", true); err != nil {
+		t.Errorf("MouseButton right down: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "right", false); err != nil {
+		t.Errorf("MouseButton right up: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "middle", true); err != nil {
+		t.Errorf("MouseButton middle down: %v", err)
+	}
+	if err := session.MouseButton(0.1, 0.1, "middle", false); err != nil {
+		t.Errorf("MouseButton middle up: %v", err)
+	}
+	if err := session.MouseScroll(0, 3); err != nil {
+		t.Errorf("MouseScroll vertical: %v", err)
+	}
+	if err := session.MouseScroll(3, 0); err != nil {
+		t.Errorf("MouseScroll horizontal: %v", err)
+	}
+	for _, key := range []string{"a", "!", "Enter", "ArrowLeft", "Shift"} {
+		if err := session.Key(key, true); err != nil {
+			t.Errorf("Key down %q: %v", key, err)
+		}
+		if err := session.Key(key, false); err != nil {
+			t.Errorf("Key up %q: %v", key, err)
 		}
 	}
 }

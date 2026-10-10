@@ -14,7 +14,25 @@ import (
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgb/xtest"
+	"github.com/bendahl/uinput"
 )
+
+// uinputPath is the kernel device node a uinput client opens to register a
+// synthetic input device. It needs the uinput module loaded and (normally)
+// root, which the agent already runs as.
+const uinputPath = "/dev/uinput"
+
+// probeUinput does a throwaway create+close of a keyboard device just to
+// answer "can this process actually drive /dev/uinput right now" -- the
+// cheapest of the three device types to stand up, and creating then
+// instantly closing one has no visible effect on the real keyboard.
+func probeUinput() error {
+	kb, err := uinput.CreateKeyboard(uinputPath, []byte("fleetview-probe"))
+	if err != nil {
+		return err
+	}
+	return kb.Close()
+}
 
 // findGraphicalSession scans /proc for a running process that has both of
 // the given environment variables set, and returns their values. The agent
@@ -87,8 +105,11 @@ func Detect() Capability {
 		if _, err := exec.LookPath("grim"); err != nil {
 			return Capability{Reason: "An active Wayland session was found, but 'grim' is not installed"}
 		}
-		return Capability{Available: true, ViewOnly: true, DisplayServer: "wayland", DesktopEnvironment: desktop,
-			Reason: "Wayland has no universal input-injection tool the way X11 has xdotool; view-only"}
+		if err := probeUinput(); err != nil {
+			return Capability{Available: true, ViewOnly: true, DisplayServer: "wayland", DesktopEnvironment: desktop,
+				Reason: fmt.Sprintf("Wayland session found, but input injection needs /dev/uinput (try 'modprobe uinput'): %v", err)}
+		}
+		return Capability{Available: true, DisplayServer: "wayland", DesktopEnvironment: desktop}
 	}
 	return Capability{Reason: "No active graphical (X11 or Wayland) session was found on this device"}
 }
@@ -110,6 +131,15 @@ type linuxSession struct {
 	// moved off it.
 	xtestConn *xgb.Conn
 	xtestRoot xproto.Window
+
+	// Wayland input: a synthetic touchpad (absolute positioning, left/right
+	// click) plus a synthetic relative mouse used only for its middle
+	// button and scroll wheel -- a touchpad device has no wheel of its
+	// own. Both nil when /dev/uinput isn't usable, in which case the
+	// session is view-only even though Capture still works.
+	uiTouchPad uinput.TouchPad
+	uiMouse    uinput.Mouse
+	uiKeyboard uinput.Keyboard
 }
 
 // xauthMu guards the brief window where XAUTHORITY is set to a specific
@@ -172,20 +202,57 @@ func NewSession() (Session, error) {
 		if _, err := exec.LookPath("grim"); err != nil {
 			return nil, fmt.Errorf("'grim' is not installed")
 		}
-		return &linuxSession{
+		session := &linuxSession{
 			displayServer: "wayland",
 			env:           []string{"WAYLAND_DISPLAY=" + vars["WAYLAND_DISPLAY"], "XDG_RUNTIME_DIR=" + vars["XDG_RUNTIME_DIR"]},
-		}, nil
+		}
+		// The touchpad device's coordinate range is fixed at creation, so
+		// the real screen size is needed up front -- unlike X11, there's no
+		// cheap "just ask" call for it on Wayland, so this takes one real
+		// capture before the session is usable at all.
+		width, height, err := session.geometry()
+		if err != nil {
+			return nil, err
+		}
+		session.width, session.height = width, height
+		if err := session.createUinputDevices(); err != nil {
+			// Best-effort: Detect() already told the dashboard whether to
+			// expect input, so a failure here just leaves the uiXxx fields
+			// nil and the session silently stays capture-only.
+			session.uiTouchPad, session.uiMouse, session.uiKeyboard = nil, nil, nil
+		}
+		return session, nil
 	}
 	return nil, fmt.Errorf("no active graphical session was found")
 }
 
+func (s *linuxSession) createUinputDevices() error {
+	touchPad, err := uinput.CreateTouchPad(uinputPath, []byte("fleetview-touchpad"), 0, int32(s.width-1), 0, int32(s.height-1))
+	if err != nil {
+		return fmt.Errorf("create touchpad: %w", err)
+	}
+	mouse, err := uinput.CreateMouse(uinputPath, []byte("fleetview-mouse"))
+	if err != nil {
+		touchPad.Close()
+		return fmt.Errorf("create mouse: %w", err)
+	}
+	keyboard, err := uinput.CreateKeyboard(uinputPath, []byte("fleetview-keyboard"))
+	if err != nil {
+		touchPad.Close()
+		mouse.Close()
+		return fmt.Errorf("create keyboard: %w", err)
+	}
+	s.uiTouchPad, s.uiMouse, s.uiKeyboard = touchPad, mouse, keyboard
+	return nil
+}
+
 func (s *linuxSession) geometry() (int, int, error) {
 	if s.displayServer == "wayland" {
-		// No xdotool-equivalent on Wayland; the first captured frame's own
-		// dimensions (set by Capture) are what MouseMove et al. would use,
-		// but those are unsupported for Wayland sessions anyway.
-		return 1, 1, nil
+		output, err := s.command(context.Background(), "grim", "-t", "jpeg", "-q", "70", "-").Output()
+		if err != nil {
+			return 0, 0, fmt.Errorf("grim: %w", err)
+		}
+		return decodeJPEGSize(output)
 	}
 	output, err := s.command(context.Background(), "xdotool", "getdisplaygeometry").Output()
 	if err != nil {
@@ -260,17 +327,128 @@ func keysymFor(key string) string {
 	return key
 }
 
+// uinput only accepts raw Linux keycodes (physical key positions), not
+// Unicode characters, so a resolved KeyboardEvent.key has to be translated
+// back to "which key, with Shift or not" assuming a US QWERTY layout -- the
+// same assumption the X11 path makes implicitly via the X server's own
+// keymap. Named keys (arrows, Enter, modifiers, function keys) aren't
+// layout-dependent and always resolve the same way.
+var namedKeyToLinuxKeycode = map[string]int{
+	" ": uinput.KeySpace, "Enter": uinput.KeyEnter, "Backspace": uinput.KeyBackspace, "Tab": uinput.KeyTab,
+	"Escape": uinput.KeyEsc,
+	"ArrowLeft": uinput.KeyLeft, "ArrowRight": uinput.KeyRight, "ArrowUp": uinput.KeyUp, "ArrowDown": uinput.KeyDown,
+	"Shift": uinput.KeyLeftshift, "Control": uinput.KeyLeftctrl, "Alt": uinput.KeyLeftalt,
+	"Meta": uinput.KeyLeftmeta, "OS": uinput.KeyLeftmeta,
+	"CapsLock": uinput.KeyCapslock, "Delete": uinput.KeyDelete, "Home": uinput.KeyHome, "End": uinput.KeyEnd,
+	"PageUp": uinput.KeyPageup, "PageDown": uinput.KeyPagedown, "Insert": uinput.KeyInsert, "ContextMenu": uinput.KeyCompose,
+	"F1": uinput.KeyF1, "F2": uinput.KeyF2, "F3": uinput.KeyF3, "F4": uinput.KeyF4, "F5": uinput.KeyF5, "F6": uinput.KeyF6,
+	"F7": uinput.KeyF7, "F8": uinput.KeyF8, "F9": uinput.KeyF9, "F10": uinput.KeyF10, "F11": uinput.KeyF11, "F12": uinput.KeyF12,
+}
+
+type linuxKey struct {
+	code  int
+	shift bool
+}
+
+var charToLinuxKeycode = map[rune]linuxKey{
+	'!': {uinput.Key1, true}, '@': {uinput.Key2, true}, '#': {uinput.Key3, true}, '$': {uinput.Key4, true},
+	'%': {uinput.Key5, true}, '^': {uinput.Key6, true}, '&': {uinput.Key7, true}, '*': {uinput.Key8, true},
+	'(': {uinput.Key9, true}, ')': {uinput.Key0, true},
+	'-': {uinput.KeyMinus, false}, '_': {uinput.KeyMinus, true},
+	'=': {uinput.KeyEqual, false}, '+': {uinput.KeyEqual, true},
+	'[': {uinput.KeyLeftbrace, false}, '{': {uinput.KeyLeftbrace, true},
+	']': {uinput.KeyRightbrace, false}, '}': {uinput.KeyRightbrace, true},
+	'\\': {uinput.KeyBackslash, false}, '|': {uinput.KeyBackslash, true},
+	';': {uinput.KeySemicolon, false}, ':': {uinput.KeySemicolon, true},
+	'\'': {uinput.KeyApostrophe, false}, '"': {uinput.KeyApostrophe, true},
+	',': {uinput.KeyComma, false}, '<': {uinput.KeyComma, true},
+	'.': {uinput.KeyDot, false}, '>': {uinput.KeyDot, true},
+	'/': {uinput.KeySlash, false}, '?': {uinput.KeySlash, true},
+	'`': {uinput.KeyGrave, false}, '~': {uinput.KeyGrave, true},
+}
+
+func init() {
+	letterCodes := []int{
+		uinput.KeyA, uinput.KeyB, uinput.KeyC, uinput.KeyD, uinput.KeyE, uinput.KeyF, uinput.KeyG, uinput.KeyH,
+		uinput.KeyI, uinput.KeyJ, uinput.KeyK, uinput.KeyL, uinput.KeyM, uinput.KeyN, uinput.KeyO, uinput.KeyP,
+		uinput.KeyQ, uinput.KeyR, uinput.KeyS, uinput.KeyT, uinput.KeyU, uinput.KeyV, uinput.KeyW, uinput.KeyX,
+		uinput.KeyY, uinput.KeyZ,
+	}
+	for i, code := range letterCodes {
+		lower := rune('a' + i)
+		upper := rune('A' + i)
+		charToLinuxKeycode[lower] = linuxKey{code, false}
+		charToLinuxKeycode[upper] = linuxKey{code, true}
+	}
+	digitCodes := []int{
+		uinput.Key0, uinput.Key1, uinput.Key2, uinput.Key3, uinput.Key4,
+		uinput.Key5, uinput.Key6, uinput.Key7, uinput.Key8, uinput.Key9,
+	}
+	for i, code := range digitCodes {
+		charToLinuxKeycode[rune('0'+i)] = linuxKey{code, false}
+	}
+}
+
+// linuxKeycodeFor translates a browser KeyboardEvent.key value to a Linux
+// uinput keycode plus whether Shift needs to be held for it.
+func linuxKeycodeFor(key string) (code int, shift bool, ok bool) {
+	if code, ok := namedKeyToLinuxKeycode[key]; ok {
+		return code, false, true
+	}
+	runes := []rune(key)
+	if len(runes) == 1 {
+		if entry, ok := charToLinuxKeycode[runes[0]]; ok {
+			return entry.code, entry.shift, true
+		}
+	}
+	return 0, false, false
+}
+
 var mouseButtonNumber = map[string]byte{"left": 1, "middle": 2, "right": 3}
 
 func (s *linuxSession) MouseMove(xFraction, yFraction float64) error {
+	x, y := s.pixel(xFraction, yFraction)
+	if s.displayServer == "wayland" {
+		if s.uiTouchPad == nil {
+			return fmt.Errorf("input is not supported for this session")
+		}
+		return s.uiTouchPad.MoveTo(int32(x), int32(y))
+	}
 	if s.xtestConn == nil {
 		return fmt.Errorf("input is not supported for this session")
 	}
-	x, y := s.pixel(xFraction, yFraction)
 	return xtest.FakeInputChecked(s.xtestConn, xproto.MotionNotify, 0, 0, s.xtestRoot, int16(x), int16(y), 0).Check()
 }
 
 func (s *linuxSession) MouseButton(xFraction, yFraction float64, button string, pressed bool) error {
+	if s.displayServer == "wayland" {
+		if s.uiTouchPad == nil {
+			return fmt.Errorf("input is not supported for this session")
+		}
+		if err := s.MouseMove(xFraction, yFraction); err != nil {
+			return err
+		}
+		switch button {
+		case "right":
+			if pressed {
+				return s.uiTouchPad.RightPress()
+			}
+			return s.uiTouchPad.RightRelease()
+		case "middle":
+			if s.uiMouse == nil {
+				return fmt.Errorf("input is not supported for this session")
+			}
+			if pressed {
+				return s.uiMouse.MiddlePress()
+			}
+			return s.uiMouse.MiddleRelease()
+		default:
+			if pressed {
+				return s.uiTouchPad.LeftPress()
+			}
+			return s.uiTouchPad.LeftRelease()
+		}
+	}
 	if s.xtestConn == nil {
 		return fmt.Errorf("input is not supported for this session")
 	}
@@ -288,16 +466,13 @@ func (s *linuxSession) MouseButton(xFraction, yFraction float64, button string, 
 	return xtest.FakeInputChecked(s.xtestConn, eventType, number, 0, s.xtestRoot, 0, 0, 0).Check()
 }
 
-func (s *linuxSession) MouseScroll(deltaX, deltaY float64) error {
-	if s.xtestConn == nil {
-		return fmt.Errorf("input is not supported for this session")
-	}
-	// X11 has no analog scroll event; wheel motion is repeated clicks of
-	// buttons 4/5 (up/down).
-	button, count := byte(5), int(deltaY)
-	if deltaY < 0 {
-		button = 4
-	}
+// scrollClicks turns a browser wheel delta into a (sign, click count) pair
+// shared by both display-server backends: X11 fakes wheel motion as
+// repeated button-4/5 clicks and uinput's relative mouse takes a signed
+// REL_WHEEL/REL_HWHEEL click count directly, so both want the same
+// clamped-magnitude integer.
+func scrollClicks(delta float64) int {
+	count := int(delta)
 	if count < 0 {
 		count = -count
 	}
@@ -307,6 +482,46 @@ func (s *linuxSession) MouseScroll(deltaX, deltaY float64) error {
 	if count > 20 {
 		count = 20
 	}
+	return count
+}
+
+func (s *linuxSession) MouseScroll(deltaX, deltaY float64) error {
+	if s.displayServer == "wayland" {
+		if s.uiMouse == nil {
+			return fmt.Errorf("input is not supported for this session")
+		}
+		// REL_WHEEL/REL_HWHEEL: positive is up/left, so a positive browser
+		// deltaY (scrolling the view down) is the negative wheel value.
+		if deltaY != 0 {
+			count := int32(scrollClicks(deltaY))
+			if deltaY > 0 {
+				count = -count
+			}
+			if err := s.uiMouse.Wheel(false, count); err != nil {
+				return err
+			}
+		}
+		if deltaX != 0 {
+			count := int32(scrollClicks(deltaX))
+			if deltaX < 0 {
+				count = -count
+			}
+			if err := s.uiMouse.Wheel(true, count); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if s.xtestConn == nil {
+		return fmt.Errorf("input is not supported for this session")
+	}
+	// X11 has no analog scroll event; wheel motion is repeated clicks of
+	// buttons 4/5 (up/down).
+	button := byte(5)
+	if deltaY < 0 {
+		button = 4
+	}
+	count := scrollClicks(deltaY)
 	for i := 0; i < count; i++ {
 		if err := xtest.FakeInputChecked(s.xtestConn, xproto.ButtonPress, button, 0, s.xtestRoot, 0, 0, 0).Check(); err != nil {
 			return err
@@ -319,6 +534,30 @@ func (s *linuxSession) MouseScroll(deltaX, deltaY float64) error {
 }
 
 func (s *linuxSession) Key(key string, pressed bool) error {
+	if s.displayServer == "wayland" {
+		if s.uiKeyboard == nil {
+			return fmt.Errorf("input is not supported for this session")
+		}
+		code, shift, ok := linuxKeycodeFor(key)
+		if !ok {
+			return fmt.Errorf("unrecognized key %q", key)
+		}
+		if pressed {
+			if shift {
+				if err := s.uiKeyboard.KeyDown(uinput.KeyLeftshift); err != nil {
+					return err
+				}
+			}
+			return s.uiKeyboard.KeyDown(code)
+		}
+		err := s.uiKeyboard.KeyUp(code)
+		if shift {
+			if shiftErr := s.uiKeyboard.KeyUp(uinput.KeyLeftshift); err == nil {
+				err = shiftErr
+			}
+		}
+		return err
+	}
 	if !s.xdotoolAvailable {
 		return fmt.Errorf("input is not supported for this session")
 	}
@@ -344,6 +583,15 @@ func (s *linuxSession) pixel(xFraction, yFraction float64) (int, int) {
 func (s *linuxSession) Close() error {
 	if s.xtestConn != nil {
 		s.xtestConn.Close()
+	}
+	if s.uiTouchPad != nil {
+		s.uiTouchPad.Close()
+	}
+	if s.uiMouse != nil {
+		s.uiMouse.Close()
+	}
+	if s.uiKeyboard != nil {
+		s.uiKeyboard.Close()
 	}
 	return nil
 }

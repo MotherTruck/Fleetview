@@ -26,10 +26,12 @@ type Capability struct {
 }
 
 // Session is one active remote-control connection: repeated frame capture
-// plus (unless the capability is view-only) input injection. Wayland
-// sessions implement Capture but return an error from the input methods --
-// there's no universal, reliable input-injection path on Wayland the way
-// xdotool provides for X11, so those sessions are view-only end to end.
+// plus (unless the capability is view-only) input injection. Wayland has no
+// equivalent to X11's XTEST, so its sessions inject input through a
+// synthetic /dev/uinput device instead (see screen_linux.go) -- that needs
+// the uinput kernel module and write access to the device node (the agent
+// runs as root, so this is normally automatic); a session falls back to
+// view-only only when that device isn't available.
 type Session interface {
 	// Capture returns one JPEG-encoded frame and its pixel dimensions.
 	Capture(ctx context.Context) (jpeg []byte, width, height int, err error)
