@@ -19,10 +19,10 @@ import (
 // and the dashboard uses it to decide whether to offer the feature at all.
 type Capability struct {
 	Available          bool   `json:"available"`
-	ViewOnly            bool   `json:"view_only"`
-	Reason              string `json:"reason"`
-	DesktopEnvironment  string `json:"desktop_environment"`
-	DisplayServer       string `json:"display_server"`
+	ViewOnly           bool   `json:"view_only"`
+	Reason             string `json:"reason"`
+	DesktopEnvironment string `json:"desktop_environment"`
+	DisplayServer      string `json:"display_server"`
 }
 
 // Session is one active remote-control connection: repeated frame capture

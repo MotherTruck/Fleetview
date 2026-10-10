@@ -112,6 +112,31 @@ covers what's specific to screen/input instead of a shell.
   If a tool genuinely can't be installed (no matching package for that
   distro, no network access at that moment), the tab explains exactly
   what's missing rather than just not being there.
+- **GNOME and KDE Wayland sessions are a different path entirely.**
+  `grim` only implements wlroots' screencopy protocol, which Mutter
+  (GNOME) and KWin (KDE) don't support at all -- on those two desktops
+  capture would silently produce nothing (a permanently black remote-
+  control view) rather than fail with a clear error, which is exactly
+  what grim-based capture looked like before this existed. The agent
+  detects GNOME/KDE by `XDG_CURRENT_DESKTOP` and instead negotiates a
+  combined `org.freedesktop.portal.ScreenCast` +
+  `org.freedesktop.portal.RemoteDesktop` session: video arrives over
+  PipeWire (via `gst-launch-1.0`, so `gstreamer1.0-tools`,
+  `gstreamer1.0-plugins-good`, and `gstreamer1.0-pipewire` are needed on
+  Debian/Ubuntu -- `gstreamer`, `gst-plugins-good`, and
+  `gst-plugin-pipewire` on Arch/CachyOS -- these are **not**
+  auto-installed the way grim/xdotool/ImageMagick are, so install them by
+  hand first) and input goes over the RemoteDesktop interface's D-Bus
+  methods, not `/dev/uinput`.
+
+  **The very first remote-control session on a given device pops a real,
+  compositor-drawn "Allow screen sharing?" dialog** on whoever is logged
+  in -- there is no way around that for a portal-mediated session, and no
+  way to know in advance whether someone will click it in two seconds or
+  two minutes (the agent waits up to 3 minutes). Once it's approved, a
+  restore token is saved under `/var/lib/fleetview-agent/` so every
+  session after that reconnects silently, with no further prompt, until
+  that approval is revoked on the device itself.
 - **Windows**: needs a session attached to the physical console (not a
   Server Core install or a machine nobody's ever logged into locally).
   Capture is GDI (`BitBlt`) and input is `SendInput`, both direct Win32

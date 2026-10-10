@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
@@ -47,34 +48,55 @@ func probeUinput() error {
 // XAUTHORITY file it points at, without needing to run commands as that
 // user.
 func findGraphicalSession(required ...string) (map[string]string, bool) {
+	vars, _, _, ok := findGraphicalSessionWithOwner(required...)
+	return vars, ok
+}
+
+// findGraphicalSessionWithOwner is findGraphicalSession plus the uid/gid
+// that actually owns the matched process -- needed to spawn the portal
+// helper as that real user (see portal_linux.go): a D-Bus session bus and
+// the desktop portal both key everything off the connecting process's real
+// uid, not an env var, so the agent (root) can't just set the right
+// environment and stay root the way it does for X11/grim.
+func findGraphicalSessionWithOwner(required ...string) (vars map[string]string, uid, gid uint32, ok bool) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return nil, false
+		return nil, 0, 0, false
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
+		pid := entry.Name()
+		if _, err := strconv.Atoi(pid); err != nil {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "environ"))
+		data, err := os.ReadFile(filepath.Join("/proc", pid, "environ"))
 		if err != nil {
 			continue
 		}
-		vars := parseEnviron(data)
+		candidate := parseEnviron(data)
 		found := true
 		for _, key := range required {
-			if vars[key] == "" {
+			if candidate[key] == "" {
 				found = false
 				break
 			}
 		}
-		if found {
-			return vars, true
+		if !found {
+			continue
 		}
+		info, err := os.Stat(filepath.Join("/proc", pid))
+		if err != nil {
+			continue
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			continue
+		}
+		return candidate, stat.Uid, stat.Gid, true
 	}
-	return nil, false
+	return nil, 0, 0, false
 }
 
 func parseEnviron(data []byte) map[string]string {
@@ -102,6 +124,9 @@ func Detect() Capability {
 	}
 	if vars, ok := findGraphicalSession("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); ok {
 		desktop := vars["XDG_CURRENT_DESKTOP"]
+		if usesDesktopPortal(desktop) {
+			return detectPortal(desktop)
+		}
 		if _, err := exec.LookPath("grim"); err != nil {
 			return Capability{Reason: "An active Wayland session was found, but 'grim' is not installed"}
 		}
@@ -112,6 +137,17 @@ func Detect() Capability {
 		return Capability{Available: true, DisplayServer: "wayland", DesktopEnvironment: desktop}
 	}
 	return Capability{Reason: "No active graphical (X11 or Wayland) session was found on this device"}
+}
+
+// usesDesktopPortal reports whether desktop is one of the compositors that
+// don't implement wlroots' screencopy protocol (what grim needs) at all --
+// GNOME's Mutter and KDE's KWin only expose screen content through the XDG
+// Desktop Portal, so those need the portal_linux.go path instead of
+// grim+uinput. Everything else (Sway, Hyprland, and other wlroots-based
+// compositors) keeps using grim+uinput, which already works there.
+func usesDesktopPortal(desktop string) bool {
+	upper := strings.ToUpper(desktop)
+	return strings.Contains(upper, "GNOME") || strings.Contains(upper, "KDE")
 }
 
 type linuxSession struct {
@@ -198,7 +234,10 @@ func NewSession() (Session, error) {
 		session.width, session.height = width, height
 		return session, nil
 	}
-	if vars, ok := findGraphicalSession("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); ok {
+	if vars, uid, gid, ok := findGraphicalSessionWithOwner("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); ok {
+		if usesDesktopPortal(vars["XDG_CURRENT_DESKTOP"]) {
+			return newPortalSession(vars, uid, gid)
+		}
 		if _, err := exec.LookPath("grim"); err != nil {
 			return nil, fmt.Errorf("'grim' is not installed")
 		}
@@ -335,7 +374,7 @@ func keysymFor(key string) string {
 // layout-dependent and always resolve the same way.
 var namedKeyToLinuxKeycode = map[string]int{
 	" ": uinput.KeySpace, "Enter": uinput.KeyEnter, "Backspace": uinput.KeyBackspace, "Tab": uinput.KeyTab,
-	"Escape": uinput.KeyEsc,
+	"Escape":    uinput.KeyEsc,
 	"ArrowLeft": uinput.KeyLeft, "ArrowRight": uinput.KeyRight, "ArrowUp": uinput.KeyUp, "ArrowDown": uinput.KeyDown,
 	"Shift": uinput.KeyLeftshift, "Control": uinput.KeyLeftctrl, "Alt": uinput.KeyLeftalt,
 	"Meta": uinput.KeyLeftmeta, "OS": uinput.KeyLeftmeta,
