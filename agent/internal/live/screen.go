@@ -69,6 +69,7 @@ func (s *screenHandler) start(session string) {
 	newSession, err := screen.NewSession()
 	if err != nil {
 		s.mu.Unlock()
+		s.logger.Printf("remote control: failed to start session: %v", err)
 		s.send(screenClosedMessage{Type: "screen_closed", Session: session, Reason: err.Error()})
 		return
 	}

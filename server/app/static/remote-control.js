@@ -74,9 +74,20 @@ async function main() {
   }
 
   let frameURL = null;
+  // A screen_closed/error message explains exactly why the session ended
+  // (a real reason string from the agent or server); the close event that
+  // follows carries none of that, so it must never blindly overwrite a
+  // reason already on screen with a bare "Disconnected" -- that was
+  // swallowing the one piece of information anyone debugging a failed
+  // connection actually needs.
+  let haveReason = false;
+  const setStatusReason = (text) => {
+    haveReason = true;
+    setStatus(text);
+  };
   const socket = new WebSocket(`${wsBase()}/api/v1/admin/devices/${encodeURIComponent(deviceId)}/screen-live`);
   socket.addEventListener("open", () => setStatus(inputEnabled ? "Connected · waiting for first frame…" : "Connected (view only) · waiting for first frame…"));
-  socket.addEventListener("close", () => setStatus("Disconnected"));
+  socket.addEventListener("close", () => { if (!haveReason) setStatus("Disconnected"); });
   socket.addEventListener("error", () => socket.close());
   socket.addEventListener("message", (event) => {
     if (event.data instanceof Blob) {
@@ -93,10 +104,10 @@ async function main() {
     if (message.type === "screen_info") {
       setStatus(inputEnabled ? "Live" : "Live (view only)");
     } else if (message.type === "screen_closed") {
-      setStatus(`Session ended: ${message.reason || "closed"}`);
+      setStatusReason(`Session ended: ${message.reason || "closed"}`);
       socket.close();
     } else if (message.type === "error") {
-      setStatus(`Error: ${message.reason || "rejected"}`);
+      setStatusReason(`Error: ${message.reason || "rejected"}`);
     }
   });
 
