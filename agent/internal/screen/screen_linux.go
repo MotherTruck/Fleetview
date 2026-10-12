@@ -111,17 +111,15 @@ func parseEnviron(data []byte) map[string]string {
 }
 
 func Detect() Capability {
-	if vars, ok := findGraphicalSession("DISPLAY", "XAUTHORITY"); ok {
-		if _, err := exec.LookPath("import"); err != nil {
-			return Capability{Reason: "An active X11 session was found, but ImageMagick's 'import' is not installed"}
-		}
-		desktop := vars["XDG_CURRENT_DESKTOP"]
-		if _, err := exec.LookPath("xdotool"); err != nil {
-			return Capability{Available: true, ViewOnly: true, DisplayServer: "x11", DesktopEnvironment: desktop,
-				Reason: "xdotool is not installed; view-only until it is"}
-		}
-		return Capability{Available: true, DisplayServer: "x11", DesktopEnvironment: desktop}
-	}
+	// Wayland is checked first and X11 falls back only when no Wayland
+	// session is found: WAYLAND_DISPLAY is a reliable signal of a real
+	// Wayland session, but DISPLAY/XAUTHORITY alone is not -- XWayland (the
+	// X11-compatibility layer virtually every modern Wayland compositor
+	// runs) leaves exactly that pair set on some process even though
+	// there's no real interactive X11 session behind it, which made the
+	// old X11-first scan latch onto a dead XWayland display on a genuinely
+	// Wayland (GNOME/KDE) desktop and fail there instead of ever trying
+	// the real Wayland/portal path.
 	if vars, ok := findGraphicalSession("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); ok {
 		desktop := vars["XDG_CURRENT_DESKTOP"]
 		if usesDesktopPortal(desktop) {
@@ -135,6 +133,17 @@ func Detect() Capability {
 				Reason: fmt.Sprintf("Wayland session found, but input injection needs /dev/uinput (try 'modprobe uinput'): %v", err)}
 		}
 		return Capability{Available: true, DisplayServer: "wayland", DesktopEnvironment: desktop}
+	}
+	if vars, ok := findGraphicalSession("DISPLAY", "XAUTHORITY"); ok {
+		if _, err := exec.LookPath("import"); err != nil {
+			return Capability{Reason: "An active X11 session was found, but ImageMagick's 'import' is not installed"}
+		}
+		desktop := vars["XDG_CURRENT_DESKTOP"]
+		if _, err := exec.LookPath("xdotool"); err != nil {
+			return Capability{Available: true, ViewOnly: true, DisplayServer: "x11", DesktopEnvironment: desktop,
+				Reason: "xdotool is not installed; view-only until it is"}
+		}
+		return Capability{Available: true, DisplayServer: "x11", DesktopEnvironment: desktop}
 	}
 	return Capability{Reason: "No active graphical (X11 or Wayland) session was found on this device"}
 }
@@ -209,31 +218,10 @@ func connectXTest(display, xauthority string) (*xgb.Conn, xproto.Window, error) 
 	return conn, root, nil
 }
 
+// NewSession checks for a Wayland session before an X11 one, for the same
+// reason Detect() does (see its comment): a stray XWayland DISPLAY must
+// never shadow a real Wayland/portal session.
 func NewSession() (Session, error) {
-	if vars, ok := findGraphicalSession("DISPLAY", "XAUTHORITY"); ok {
-		if _, err := exec.LookPath("import"); err != nil {
-			return nil, fmt.Errorf("ImageMagick's 'import' is not installed")
-		}
-		session := &linuxSession{
-			displayServer:    "x11",
-			env:              []string{"DISPLAY=" + vars["DISPLAY"], "XAUTHORITY=" + vars["XAUTHORITY"]},
-			xdotoolAvailable: false,
-		}
-		if _, err := exec.LookPath("xdotool"); err == nil {
-			session.xdotoolAvailable = true
-		}
-		if conn, root, err := connectXTest(vars["DISPLAY"], vars["XAUTHORITY"]); err == nil {
-			session.xtestConn = conn
-			session.xtestRoot = root
-		}
-		width, height, err := session.geometry()
-		if err != nil {
-			session.Close()
-			return nil, err
-		}
-		session.width, session.height = width, height
-		return session, nil
-	}
 	if vars, uid, gid, ok := findGraphicalSessionWithOwner("WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"); ok {
 		if usesDesktopPortal(vars["XDG_CURRENT_DESKTOP"]) {
 			return newPortalSession(vars, uid, gid)
@@ -260,6 +248,30 @@ func NewSession() (Session, error) {
 			// nil and the session silently stays capture-only.
 			session.uiTouchPad, session.uiMouse, session.uiKeyboard = nil, nil, nil
 		}
+		return session, nil
+	}
+	if vars, ok := findGraphicalSession("DISPLAY", "XAUTHORITY"); ok {
+		if _, err := exec.LookPath("import"); err != nil {
+			return nil, fmt.Errorf("ImageMagick's 'import' is not installed")
+		}
+		session := &linuxSession{
+			displayServer:    "x11",
+			env:              []string{"DISPLAY=" + vars["DISPLAY"], "XAUTHORITY=" + vars["XAUTHORITY"]},
+			xdotoolAvailable: false,
+		}
+		if _, err := exec.LookPath("xdotool"); err == nil {
+			session.xdotoolAvailable = true
+		}
+		if conn, root, err := connectXTest(vars["DISPLAY"], vars["XAUTHORITY"]); err == nil {
+			session.xtestConn = conn
+			session.xtestRoot = root
+		}
+		width, height, err := session.geometry()
+		if err != nil {
+			session.Close()
+			return nil, err
+		}
+		session.width, session.height = width, height
 		return session, nil
 	}
 	return nil, fmt.Errorf("no active graphical session was found")
