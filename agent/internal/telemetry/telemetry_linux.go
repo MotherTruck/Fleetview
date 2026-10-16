@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"fleetview-agent/internal/model"
 )
 
 func rootPath() string { return "/" }
@@ -106,6 +108,65 @@ func readDisk(path string) (uint64, uint64) {
 	}
 	blockSize := uint64(stats.Bsize)
 	return stats.Blocks * blockSize, stats.Bavail * blockSize
+}
+
+// pseudoFilesystems are mount sources that don't represent a real,
+// device-backed drive -- /proc/mounts lists all of these right alongside
+// genuine disks, with no flag of its own to tell them apart, so filtering
+// has to go by filesystem type. Not exhaustive, but covers everything a
+// normal Linux install (desktop or server) actually mounts that isn't a
+// disk: virtual kernel filesystems, container/snap layers, and the various
+// pipe/socket-backed ones.
+var pseudoFilesystems = map[string]bool{
+	"proc": true, "sysfs": true, "devtmpfs": true, "tmpfs": true, "devpts": true,
+	"cgroup": true, "cgroup2": true, "overlay": true, "squashfs": true, "autofs": true,
+	"mqueue": true, "debugfs": true, "tracefs": true, "securityfs": true, "pstore": true,
+	"bpf": true, "configfs": true, "fusectl": true, "hugetlbfs": true, "rpc_pipefs": true,
+	"nsfs": true, "binfmt_misc": true, "ramfs": true, "efivarfs": true, "fuse.portal": true,
+	"fuse.gvfsd-fuse": true,
+}
+
+// maxDisks bounds how many mounted filesystems a single report carries --
+// generous for any real machine, just a backstop against an unusual system
+// with hundreds of mounts turning one metrics report into something huge.
+const maxDisks = 64
+
+func readDisks() []model.Disk {
+	file, err := os.Open("/proc/mounts")
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+
+	var disks []model.Disk
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() && len(disks) < maxDisks {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 {
+			continue
+		}
+		device, mountPoint, fsType := fields[0], fields[1], fields[2]
+		if pseudoFilesystems[fsType] || strings.HasPrefix(fsType, "fuse.") {
+			continue
+		}
+		if !strings.HasPrefix(device, "/dev/") && !strings.Contains(device, ":/") {
+			// Neither a real block device (/dev/...) nor a network share
+			// (host:/path, e.g. NFS) -- whatever it is, it's not a drive.
+			continue
+		}
+		total, available := readDisk(mountPoint)
+		if total == 0 {
+			continue
+		}
+		disks = append(disks, model.Disk{
+			MountPoint: mountPoint,
+			Device:     device,
+			Filesystem: fsType,
+			UsedBytes:  subtractFloor(total, available),
+			TotalBytes: total,
+		})
+	}
+	return disks
 }
 
 func readLoad() (float64, float64, float64) {

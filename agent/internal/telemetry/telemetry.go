@@ -70,6 +70,7 @@ func (c *Collector) Collect(gpuMonitoringEnabled bool) (model.MetricsReport, err
 
 	memoryTotal, memoryAvailable, swapTotal, swapFree := readMemory()
 	diskTotal, diskAvailable := readDisk(rootPath())
+	disks := readDisks()
 	load1, load5, load15 := readLoad()
 	temperature := readTemperature()
 
@@ -93,6 +94,7 @@ func (c *Collector) Collect(gpuMonitoringEnabled bool) (model.MetricsReport, err
 		TemperatureCelsius:   temperature,
 		UptimeSeconds:        uptimeSeconds(),
 		GPUs:                 collectGPUs(gpuMonitoringEnabled),
+		Disks:                disks,
 	}, nil
 }
 

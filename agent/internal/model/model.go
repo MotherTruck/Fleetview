@@ -85,26 +85,39 @@ type ResourceConsumer struct {
 }
 
 type MetricsReport struct {
-	RecordedAt           time.Time `json:"recorded_at"`
-	CPUPercent           float64   `json:"cpu_percent"`
-	MemoryUsedBytes      uint64    `json:"memory_used_bytes"`
-	MemoryTotalBytes     uint64    `json:"memory_total_bytes"`
-	SwapUsedBytes        uint64    `json:"swap_used_bytes"`
-	SwapTotalBytes       uint64    `json:"swap_total_bytes"`
-	DiskUsedBytes        uint64    `json:"disk_used_bytes"`
-	DiskTotalBytes       uint64    `json:"disk_total_bytes"`
-	Load1                float64   `json:"load_1"`
-	Load5                float64   `json:"load_5"`
-	Load15               float64   `json:"load_15"`
-	NetworkReceiveBPS    float64   `json:"network_receive_bps"`
-	NetworkTransmitBPS   float64   `json:"network_transmit_bps"`
-	NetworkReceiveBytes  uint64    `json:"network_receive_bytes"`
-	NetworkTransmitBytes uint64    `json:"network_transmit_bytes"`
-	ProcessCount         int       `json:"process_count"`
-	TemperatureCelsius   *float64  `json:"temperature_celsius,omitempty"`
-	UptimeSeconds        uint64    `json:"uptime_seconds"`
-	GPUs                 []GPU     `json:"gpus"`
+	RecordedAt           time.Time          `json:"recorded_at"`
+	CPUPercent           float64            `json:"cpu_percent"`
+	MemoryUsedBytes      uint64             `json:"memory_used_bytes"`
+	MemoryTotalBytes     uint64             `json:"memory_total_bytes"`
+	SwapUsedBytes        uint64             `json:"swap_used_bytes"`
+	SwapTotalBytes       uint64             `json:"swap_total_bytes"`
+	DiskUsedBytes        uint64             `json:"disk_used_bytes"`
+	DiskTotalBytes       uint64             `json:"disk_total_bytes"`
+	Load1                float64            `json:"load_1"`
+	Load5                float64            `json:"load_5"`
+	Load15               float64            `json:"load_15"`
+	NetworkReceiveBPS    float64            `json:"network_receive_bps"`
+	NetworkTransmitBPS   float64            `json:"network_transmit_bps"`
+	NetworkReceiveBytes  uint64             `json:"network_receive_bytes"`
+	NetworkTransmitBytes uint64             `json:"network_transmit_bytes"`
+	ProcessCount         int                `json:"process_count"`
+	TemperatureCelsius   *float64           `json:"temperature_celsius,omitempty"`
+	UptimeSeconds        uint64             `json:"uptime_seconds"`
+	GPUs                 []GPU              `json:"gpus"`
 	TopConsumers         []ResourceConsumer `json:"top_consumers"`
+	Disks                []Disk             `json:"disks"`
+}
+
+// Disk is one mounted, real (device-backed) filesystem -- DiskUsedBytes/
+// DiskTotalBytes above stay root-only for backward compatibility with the
+// existing history charts and the "Root disk" current-metrics tile; this
+// is the full list for the dashboard's "All drives" view.
+type Disk struct {
+	MountPoint string `json:"mount_point"`
+	Device     string `json:"device,omitempty"`
+	Filesystem string `json:"filesystem,omitempty"`
+	UsedBytes  uint64 `json:"used_bytes"`
+	TotalBytes uint64 `json:"total_bytes"`
 }
 
 type GPU struct {

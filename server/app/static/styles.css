@@ -217,7 +217,7 @@ dialog label, .modal-panel label { display: grid; gap: 8px; color: var(--soft); 
 .gpu-section { margin: 14px 0; }
 .gpu-section > div:first-child { margin-bottom: 10px; }
 .gpu-section h3 { margin: 0; }
-.top-consumers-section { margin: 14px 0 22px; }
+.top-consumers-section, .disks-section { margin: 14px 0 22px; }
 .top-consumers-section h3 { margin: 0; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }

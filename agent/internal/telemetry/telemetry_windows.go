@@ -7,6 +7,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"fleetview-agent/internal/model"
 )
 
 // GlobalMemoryStatusEx, GetSystemTimes, and GetPerformanceInfo are not
@@ -148,6 +150,44 @@ func readDisk(path string) (uint64, uint64) {
 		return 0, 0
 	}
 	return totalBytes, freeAvailable
+}
+
+// readDisks lists every drive letter Windows actually reports, not just the
+// system drive -- GetLogicalDrives returns a bitmask (bit N set means drive
+// letter 'A'+N exists). DRIVE_REMOVABLE (USB) and DRIVE_FIXED (internal/
+// external HDD/SSD) are both included since both are real, mounted drives;
+// DRIVE_CDROM (usually empty, and GetDiskFreeSpaceEx fails on it when it is)
+// and DRIVE_REMOTE (a network share, not a local drive) are not.
+func readDisks() []model.Disk {
+	mask, err := windows.GetLogicalDrives()
+	if err != nil {
+		return nil
+	}
+	var disks []model.Disk
+	for i := 0; i < 26; i++ {
+		if mask&(1<<uint(i)) == 0 {
+			continue
+		}
+		root := string(rune('A'+i)) + `:\`
+		rootPtr, err := windows.UTF16PtrFromString(root)
+		if err != nil {
+			continue
+		}
+		driveType := windows.GetDriveType(rootPtr)
+		if driveType != windows.DRIVE_FIXED && driveType != windows.DRIVE_REMOVABLE {
+			continue
+		}
+		total, available := readDisk(root)
+		if total == 0 {
+			continue
+		}
+		disks = append(disks, model.Disk{
+			MountPoint: root,
+			UsedBytes:  subtractFloor(total, available),
+			TotalBytes: total,
+		})
+	}
+	return disks
 }
 
 // readLoad has no meaningful equivalent on Windows: there is no load-average

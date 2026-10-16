@@ -576,6 +576,8 @@ pub(crate) struct MetricsReportPayload {
     gpus: Vec<Value>,
     #[serde(default)]
     top_consumers: Vec<Value>,
+    #[serde(default)]
+    disks: Vec<Value>,
 }
 
 async fn report_metrics(

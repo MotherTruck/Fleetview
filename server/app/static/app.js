@@ -1840,6 +1840,27 @@ function renderMonitoringLive(device) {
     return `<article><div class="gpu-title"><div><small>${escapeHtml(gpu.vendor)}</small><strong>${escapeHtml(gpu.name)}</strong></div><span>GPU ${escapeHtml(gpu.index)}</span></div><dl><div><dt>Utilization</dt><dd>${formatPercent(gpu.utilization_percent)}</dd></div><div><dt>VRAM</dt><dd>${gpu.memory_total_bytes ? formatUsage(gpu.memory_used_bytes, gpu.memory_total_bytes) : "Not reported"}</dd></div><div><dt>Temperature</dt><dd>${escapeHtml(temperatureValue)}</dd></div><div><dt>Power</dt><dd>${escapeHtml(powerValue)}</dd></div></dl>${usageBar(gpu.utilization_percent)}${gpuMemory === null ? "" : usageBar(gpuMemory, "blue")}</article>`;
   }).join("")}</div></section>` : '<section class="gpu-section empty-gpu"><p>No supported GPU telemetry was detected on this device.</p></section>';
 
+  const disks = Array.isArray(metrics.disks) ? metrics.disks : [];
+  const disksSection = disks.length ? `
+    <section class="disks-section">
+      <div class="monitoring-heading"><div><p class="eyebrow">STORAGE</p><h3>All drives</h3></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mount point</th><th>Device</th><th>Filesystem</th><th>Used</th><th>Size</th></tr></thead>
+          <tbody>${disks.map((d) => {
+            const used = usagePercent(d.used_bytes, d.total_bytes);
+            return `<tr>
+              <td class="package-name">${escapeHtml(d.mount_point || "—")}</td>
+              <td>${escapeHtml(d.device || "—")}</td>
+              <td>${escapeHtml(d.filesystem || "—")}</td>
+              <td>${formatPercent(used)}<br>${usageBar(used, used >= 90 ? "orange" : "green")}</td>
+              <td>${formatUsage(d.used_bytes, d.total_bytes)}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>
+    </section>` : "";
+
   const consumers = Array.isArray(metrics.top_consumers) ? [...metrics.top_consumers] : [];
   const sortKey = state.topConsumersSort;
   consumers.sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
@@ -1881,6 +1902,7 @@ function renderMonitoringLive(device) {
       <div><small>Network now</small><strong>↓ ${formatRate(metrics.network_receive_bps)}</strong><span>↑ ${formatRate(metrics.network_transmit_bps)}</span></div>
     </div>
     ${gpuCards}
+    ${disksSection}
     ${topConsumersSection}`;
 }
 
