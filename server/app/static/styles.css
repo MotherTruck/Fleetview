@@ -151,7 +151,11 @@ dialog label, .modal-panel label { display: grid; gap: 8px; color: var(--soft); 
 .modal-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.7); backdrop-filter: blur(4px); }
 .modal-overlay[hidden] { display: none; }
 .dialog-actions { display: flex; justify-content: end; gap: 8px; margin-top: 20px; }
-.device-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100vh - 40px); padding: 0; overflow: hidden; }
+/* Full-viewport rather than a centered box: device details grew too many
+   tabs/sections (monitoring charts, drives, top consumers, containers,
+   terminal, files...) to stay usable as a 1100px modal. */
+.device-dialog { width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; border-radius: 0; padding: 0; overflow: hidden; }
+.device-dialog::backdrop { background: var(--bg); }
 .detail-header { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 24px; border-bottom: 1px solid var(--border); }
 .detail-header .detail-subtitle { margin: 5px 0 0; color: var(--muted); }
 .detail-header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
