@@ -1183,7 +1183,43 @@ const ALLOWED_JOB_TYPES: &[&str] = &[
     "INSTALL_PACKAGE",
     "UNINSTALL_PACKAGE",
     "DOCKER_CONTAINER_ACTION",
+    "DOCKER_COMPOSE_UP",
 ];
+
+// Mirrors deployment.rs/live.rs's own private copy of this same check --
+// each module that version-gates a job/feature keeps its own, rather than
+// sharing one, matching how this codebase already does it.
+fn version_at_least(version: Option<&str>, required: (i32, i32)) -> bool {
+    let parts: Vec<i32> = version
+        .unwrap_or("")
+        .split('.')
+        .take(2)
+        .map(|p| p.parse::<i32>().unwrap_or(-1))
+        .collect();
+    matches!(parts.as_slice(), [major, minor] if (*major, *minor) >= required)
+}
+
+fn supports_docker_compose_up(device: &Device) -> bool {
+    version_at_least(device.agent_version.as_deref(), (0, 29))
+}
+
+// docker compose's own project-name rule: lowercase alphanumerics, '-' and
+// '_', starting with an alphanumeric. Enforced here too (not just agent-
+// side) since this ends up as a shell argument and part of a temp file's
+// container-grouping label on the endpoint.
+const MAX_COMPOSE_BYTES: usize = 256 * 1024;
+
+fn valid_compose_project(name: &str) -> bool {
+    if name.is_empty() || name.len() > 63 {
+        return false;
+    }
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else { return false };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return false;
+    }
+    name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
 
 #[derive(Deserialize)]
 struct JobCreatePayload {
@@ -1282,6 +1318,26 @@ async fn create_job(
         if !docker_available || !container_known {
             return Err(ApiError::bad_request(
                 "Container is not in this device's latest Docker inventory",
+            ));
+        }
+    }
+    if payload.job_type == "DOCKER_COMPOSE_UP" {
+        if !supports_docker_compose_up(&device) {
+            return Err(ApiError::bad_request(
+                "Upgrade this device's native agent to 0.29.0 before deploying from a compose file",
+            ));
+        }
+        let docker_available = device.inventory.get("docker_available") == Some(&Value::Bool(true));
+        if !docker_available {
+            return Err(ApiError::bad_request("Docker is not available on this device"));
+        }
+        let compose = payload.options.get("compose").and_then(Value::as_str);
+        let project = payload.options.get("project").and_then(Value::as_str);
+        let compose_ok = compose.map(|c| !c.trim().is_empty() && c.len() <= MAX_COMPOSE_BYTES).unwrap_or(false);
+        let project_ok = project.map(valid_compose_project).unwrap_or(false);
+        if !compose_ok || !project_ok || payload.options.len() != 2 {
+            return Err(ApiError::bad_request(
+                "A compose file and a valid project name are required",
             ));
         }
     }

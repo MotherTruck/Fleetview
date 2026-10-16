@@ -1180,7 +1180,7 @@ function renderNetworkTopology() {
   </tr>`).join("") : '<tr><td colspan="5" class="empty">No DHCP leases synced yet.</td></tr>';
 }
 
-const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN" };
+const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN" };
 
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
@@ -2120,6 +2120,7 @@ function renderDeviceDetails() {
   $("#detailTableSummary").hidden = overview || monitoring || terminal || files;
   $("#detailTableWrap").hidden = overview || monitoring || terminal || files;
   $("#patchControls").hidden = state.detailTab !== "patches";
+  $("#dockerComposeCreator").hidden = state.detailTab !== "docker" || state.user?.role === "viewer";
   $("#detailFootnote").textContent = "";
   if (overview) {
     renderOverview(device);
@@ -2396,6 +2397,80 @@ $("#appTabs").addEventListener("click", (event) => {
 $("#patchDevices").addEventListener("click", handleDeviceAction);
 $("#inventoryDevices").addEventListener("click", handleDeviceAction);
 $("#networkTopologyTable").addEventListener("click", handleDeviceAction);
+function resetComposeForm() {
+  $("#composeForm").reset();
+  // HTMLFormElement.reset() doesn't fire a change event, so the mode
+  // toggle's own listener (which shows/hides the paste vs. build fields)
+  // never runs -- without this, resetting back to the default "paste"
+  // radio could leave the build-mode fields visibly stuck open.
+  $("#composeBuildMode").hidden = true;
+  $("#composePasteMode").hidden = false;
+  $("#composeForm").hidden = true;
+  $("#composeToggle").textContent = "Open compose creator";
+  $("#composeError").textContent = "";
+}
+$("#composeToggle").addEventListener("click", () => {
+  const form = $("#composeForm");
+  form.hidden = !form.hidden;
+  $("#composeToggle").textContent = form.hidden ? "Open compose creator" : "Close compose creator";
+});
+$("#composeCancel").addEventListener("click", resetComposeForm);
+$("#composeForm").addEventListener("change", (event) => {
+  if (event.target.name === "composeMode") {
+    const build = event.target.value === "build";
+    $("#composeBuildMode").hidden = !build;
+    $("#composePasteMode").hidden = build;
+  }
+});
+
+// A plain JSON string is also a valid YAML double-quoted scalar (YAML's
+// double-quoted flow style follows JSON escaping rules), so this is a
+// safe way to emit arbitrary user-typed values (image names, bind-mount
+// paths, env assignments) without a full YAML serializer.
+function yamlQuote(value) { return JSON.stringify(value); }
+
+function buildComposeYaml() {
+  const service = $("#composeServiceName").value.trim();
+  const image = $("#composeImage").value.trim();
+  if (!service || !image) throw new Error("Service name and image are required.");
+  const containerName = $("#composeContainerName").value.trim();
+  const restart = $("#composeRestart").value;
+  const splitLines = (id) => $(id).value.split("\n").map((line) => line.trim()).filter(Boolean);
+  const ports = splitLines("#composePorts");
+  const volumes = splitLines("#composeVolumes");
+  const env = splitLines("#composeEnv");
+  const lines = ["services:", `  ${service}:`, `    image: ${yamlQuote(image)}`];
+  if (containerName) lines.push(`    container_name: ${yamlQuote(containerName)}`);
+  lines.push(`    restart: ${restart}`);
+  if (ports.length) { lines.push("    ports:"); ports.forEach((p) => lines.push(`      - ${yamlQuote(p)}`)); }
+  if (volumes.length) { lines.push("    volumes:"); volumes.forEach((v) => lines.push(`      - ${yamlQuote(v)}`)); }
+  if (env.length) { lines.push("    environment:"); env.forEach((e) => lines.push(`      - ${yamlQuote(e)}`)); }
+  return lines.join("\n") + "\n";
+}
+
+$("#composeForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const device = state.detailDevice;
+  if (!device) return;
+  $("#composeError").textContent = "";
+  const project = $("#composeProject").value.trim();
+  let compose;
+  try {
+    const mode = $("#composeForm").querySelector('input[name="composeMode"]:checked').value;
+    compose = mode === "paste" ? $("#composeYaml").value : buildComposeYaml();
+  } catch (error) { $("#composeError").textContent = error.message; return; }
+  if (!compose.trim()) { $("#composeError").textContent = "A compose file is required."; return; }
+  const submitButton = $("#composeForm").querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({ type: "DOCKER_COMPOSE_UP", options: { project, compose } }),
+    });
+    showNotice(`Compose deploy queued for ${device.hostname}. Check Jobs for the result.`);
+    resetComposeForm();
+  } catch (error) { $("#composeError").textContent = error.message; }
+  finally { submitButton.disabled = false; }
+});
 $("#detailTableBody").addEventListener("click", async event => {
   const dockerButton = event.target.closest("[data-docker-action]");
   if (dockerButton) {

@@ -603,6 +603,69 @@ FLEETVIEW_PORT=8080</code></pre>
           </table>
         </div>
       </div>
+      <div id="dockerComposeCreator" class="panel-body compose-creator" hidden>
+        <div class="monitoring-heading">
+          <div><p class="eyebrow">DEPLOY</p><h3>Create from a compose file</h3></div>
+          <button id="composeToggle" type="button" class="secondary">Open compose creator</button>
+        </div>
+        <form id="composeForm" class="compose-form" hidden>
+          <label>Project name
+            <input id="composeProject" maxlength="63" pattern="[a-z0-9][a-z0-9_-]{0,62}" placeholder="my-app" required>
+          </label>
+          <div class="compose-mode-toggle" role="radiogroup" aria-label="Compose source">
+            <label><input type="radio" name="composeMode" value="paste" checked> Paste a compose file</label>
+            <label><input type="radio" name="composeMode" value="build"> Build one</label>
+          </div>
+
+          <div id="composePasteMode">
+            <label>Compose file (YAML)
+              <textarea id="composeYaml" rows="12" spellcheck="false" placeholder="services:
+  app:
+    image: nginx:latest
+    ports:
+      - &quot;8080:80&quot;"></textarea>
+            </label>
+          </div>
+
+          <div id="composeBuildMode" hidden>
+            <div class="settings-grid">
+              <label>Service name
+                <input id="composeServiceName" maxlength="63" pattern="[a-z0-9][a-z0-9_-]{0,62}" placeholder="app">
+              </label>
+              <label>Image
+                <input id="composeImage" maxlength="255" placeholder="nginx:latest">
+              </label>
+              <label>Container name (optional)
+                <input id="composeContainerName" maxlength="255" placeholder="my-app">
+              </label>
+              <label>Restart policy
+                <select id="composeRestart">
+                  <option value="unless-stopped" selected>unless-stopped</option>
+                  <option value="always">always</option>
+                  <option value="on-failure">on-failure</option>
+                  <option value="no">no</option>
+                </select>
+              </label>
+            </div>
+            <label>Ports (one per line, host:container -- e.g. 8080:80)
+              <textarea id="composePorts" rows="3" spellcheck="false" placeholder="8080:80"></textarea>
+            </label>
+            <label>Volumes (one per line, host-path:container-path -- this is where the container's data lives on disk)
+              <textarea id="composeVolumes" rows="3" spellcheck="false" placeholder="/srv/my-app/data:/data"></textarea>
+            </label>
+            <label>Environment variables (one per line, KEY=VALUE)
+              <textarea id="composeEnv" rows="3" spellcheck="false" placeholder="PUID=1000"></textarea>
+            </label>
+          </div>
+
+          <p id="composeError" class="auth-error" role="alert"></p>
+          <div class="dialog-actions">
+            <button id="composeCancel" type="button" class="secondary">Cancel</button>
+            <button type="submit">Deploy</button>
+          </div>
+          <p class="form-note">Runs <code>docker compose up -d</code> on this device with the given project/file. Requires agent 0.29.0+ and the <code>docker compose</code> CLI plugin on the endpoint. The job result (including any error) appears in this device's job history.</p>
+        </form>
+      </div>
       <p id="detailTableSummary" class="table-summary"></p>
       <div id="detailTableWrap" class="table-wrap detail-table-wrap">
         <table>

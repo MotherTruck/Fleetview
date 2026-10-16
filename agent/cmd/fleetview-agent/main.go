@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.28.0"
+var version = "0.29.0"
 
 const serviceName = "fleetview-agent"
 
@@ -292,6 +292,21 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 			result.Output = fmt.Sprintf("Docker container %s: %s", id, action)
 			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
 				logger.Printf("post-Docker-action scan failed: %v", scanErr)
+			}
+		}
+	case "DOCKER_COMPOSE_UP":
+		if !dockerInventoryEnabled {
+			err = fmt.Errorf("Docker inventory and management are disabled for this device")
+			break
+		}
+		project, _ := job.Options["project"].(string)
+		compose, _ := job.Options["compose"].(string)
+		var composeOutput string
+		composeOutput, err = containers.ComposeUp(ctx, project, compose)
+		if err == nil {
+			result.Output = composeOutput
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-compose-up scan failed: %v", scanErr)
 			}
 		}
 	case "SCAN_VULNERABILITIES":
