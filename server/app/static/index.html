@@ -507,17 +507,17 @@ FLEETVIEW_PORT=8080</code></pre>
       </section>
     </main>
 
-    <dialog id="tokenDialog">
-      <form id="loginForm" class="auth-form">
+    <div id="tokenDialog" class="modal-overlay" hidden>
+      <form id="loginForm" class="auth-form modal-panel">
         <h2 id="loginTitle">Sign in to FleetView</h2>
         <p id="loginDescription">Use your FleetView account.</p>
-        <label id="setupTokenLabel" hidden>Existing admin token (one-time setup)<input id="setupToken" type="password" autocomplete="off"></label>
-        <label>Username<input id="loginUsername" autocomplete="username" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required></label>
-        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <label id="setupTokenLabel" hidden>Existing admin token (one-time setup)<input id="setupToken" name="setupToken" type="password" autocomplete="off"></label>
+        <label>Username<input id="loginUsername" name="username" autocomplete="username" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required></label>
+        <label>Password<input id="loginPassword" name="password" type="password" autocomplete="current-password" maxlength="128" required></label>
         <p id="loginError" class="auth-error" role="alert"></p>
         <button id="loginSubmit" type="submit">Sign in</button>
       </form>
-    </dialog>
+    </div>
 
     <dialog id="passwordDialog">
       <form id="passwordForm" class="auth-form">

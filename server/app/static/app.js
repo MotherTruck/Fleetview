@@ -462,7 +462,7 @@ function openLogin(message = "") {
   $("#loginPassword").autocomplete = state.setupRequired ? "new-password" : "current-password";
   $("#loginSubmit").textContent = state.setupRequired ? "Create admin account" : "Sign in";
   $("#loginError").textContent = message;
-  if (!$("#tokenDialog").open) $("#tokenDialog").showModal();
+  $("#tokenDialog").hidden = false;
 }
 
 async function initializeAuth() {
@@ -480,7 +480,7 @@ function acceptSession(session) {
   state.authGeneration = (state.authGeneration || 0) + 1;
   state.user = session.user; state.csrf = session.csrf_token;
   state.setupRequired = false;
-  $("#tokenDialog").close();
+  $("#tokenDialog").hidden = true;
   $("#loginPassword").value = ""; $("#setupToken").value = "";
   applyPermissions();
   if (state.user.must_change_password) {
@@ -512,7 +512,6 @@ async function loadUsers() {
   } catch (error) { $("#userNotice").textContent = error.message; }
 }
 
-$("#tokenDialog").addEventListener("cancel", event => event.preventDefault());
 $("#passwordDialog").addEventListener("cancel", event => { if (state.user?.must_change_password) event.preventDefault(); });
 $("#loginForm").addEventListener("submit", async event => {
   event.preventDefault();
@@ -1852,22 +1851,23 @@ function renderMonitoringLive(device) {
       <td>${formatPercent(item.cpu_percent)}</td>
       <td>${formatBytes(item.memory_bytes)}</td>
     </tr>`).join("") : '<tr><td colspan="5" class="empty">No process/container data reported yet -- requires agent 0.22.0 or later.</td></tr>';
+  const sortArrow = (key) => sortKey === key ? " ▾" : "";
   const topConsumersSection = `
     <section class="top-consumers-section">
       <div class="monitoring-heading">
         <div><p class="eyebrow">LIVE SNAPSHOT</p><h3>Top resource consumers</h3></div>
-        <div class="consumer-sort-toggle">
-          <button type="button" class="secondary ${sortKey === "cpu_percent" ? "active" : ""}" data-consumer-sort="cpu_percent">Sort by CPU</button>
-          <button type="button" class="secondary ${sortKey === "memory_bytes" ? "active" : ""}" data-consumer-sort="memory_bytes">Sort by memory</button>
-        </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Kind</th><th>Name</th><th>PID</th><th>CPU</th><th>Memory</th></tr></thead>
+          <thead><tr>
+            <th>Kind</th><th>Name</th><th>PID</th>
+            <th class="sortable ${sortKey === "cpu_percent" ? "active" : ""}" data-consumer-sort="cpu_percent">CPU${sortArrow("cpu_percent")}</th>
+            <th class="sortable ${sortKey === "memory_bytes" ? "active" : ""}" data-consumer-sort="memory_bytes">Memory${sortArrow("memory_bytes")}</th>
+          </tr></thead>
           <tbody>${consumerRows}</tbody>
         </table>
       </div>
-      <p class="form-note">Host processes and running Docker containers merged into one list: the top entries by CPU and by memory (deduplicated), not a single blended score.</p>
+      <p class="form-note">Host processes and running Docker containers merged into one list: click a column to sort by it (deduplicated top entries, not a single blended score).</p>
     </section>`;
 
   container.innerHTML = `
