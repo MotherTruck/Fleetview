@@ -14,7 +14,7 @@ mod reports;
 mod secrets_crypto;
 mod security;
 
-use axum::extract::Request;
+use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::HeaderValue;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -68,7 +68,15 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state)
         .route_service("/", ServeFile::new(index_path))
         .nest_service("/static", ServeDir::new(&static_dir))
-        .layer(middleware::from_fn(security_headers));
+        .layer(middleware::from_fn(security_headers))
+        // axum's own default is 2MB, silently applied to every route since
+        // nothing here overrode it -- fine for most JSON bodies, but a
+        // vulnerability report from a device with a lot of listening
+        // services/CVEs can exceed that, and a real custom installer
+        // upload (upload_bundle, deployment.rs) almost always does. 512MB
+        // comfortably covers both without opening this up to an
+        // unbounded request.
+        .layer(DefaultBodyLimit::max(512 * 1024 * 1024));
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
