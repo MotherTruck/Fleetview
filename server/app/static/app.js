@@ -671,8 +671,21 @@ function setPage(page) {
   if (page === "agent" && state.user?.role !== "admin") page = "dashboard";
   if (page === "integrations" && state.user?.role !== "admin") page = "dashboard";
   if (page === "deploy" && state.user?.role === "viewer") page = "dashboard";
+  // Device details is a page (data-page-panel="device-detail"), not a
+  // dialog, so navigating away from it -- via the nav, the close button,
+  // or removing the device -- is just a normal page switch. Its live
+  // connections (metrics/terminal/files) only make sense while it's the
+  // active page, so leaving it always tears them down.
+  if (state.page === "device-detail" && page !== "device-detail") {
+    disconnectDeviceMetrics(); disconnectTerminal(); disconnectFiles();
+  }
   state.page = page;
-  document.querySelectorAll("[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === page));
+  // Device details isn't one of the top-level nav tabs (there's no
+  // data-page="device-detail" button) -- while it's open, Inventory stays
+  // highlighted, since that's conceptually where you are and where
+  // clicking Inventory again takes you.
+  const highlightedPage = page === "device-detail" ? "inventory" : page;
+  document.querySelectorAll("[data-page]").forEach((button) => button.classList.toggle("active", button.dataset.page === highlightedPage));
   document.querySelectorAll("[data-page-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.pagePanel === page));
   if (page === "admin" && state.user?.role === "admin") loadUsers();
 }
@@ -2215,7 +2228,11 @@ function renderDeviceDetails() {
 }
 
 async function openDeviceDetails(deviceId, tab = "overview") {
-  const dialog = $("#deviceDialog");
+  // Remember whichever page you were actually on (Dashboard, Patching,
+  // Inventory, the network topology view...) so the close button returns
+  // you there -- but only capture it the first time, not every time you
+  // click into a different device while already viewing one.
+  if (state.page !== "device-detail") state.detailOriginPage = state.page;
   state.detailDevice = null;
   state.detailTab = tab;
   state.detailHistory = [];
@@ -2229,7 +2246,7 @@ async function openDeviceDetails(deviceId, tab = "overview") {
   $("#detailTableSummary").textContent = "Loading device data…";
   $("#detailTableHead").innerHTML = "";
   $("#detailTableBody").innerHTML = "";
-  if (!dialog.open) dialog.showModal();
+  setPage("device-detail");
   try {
     const [details, approvals, schedule] = await Promise.all([
       api(`/api/v1/admin/devices/${deviceId}`),
@@ -2799,8 +2816,7 @@ $("#authButton").addEventListener("click", async () => {
     openLogin("You have signed out.");
   } catch (error) { showNotice(error.message, true); }
 });
-$("#closeDeviceDialog").addEventListener("click", () => $("#deviceDialog").close());
-$("#deviceDialog").addEventListener("close", () => { disconnectDeviceMetrics(); disconnectTerminal(); disconnectFiles(); });
+$("#closeDeviceDialog").addEventListener("click", () => setPage(state.detailOriginPage || "inventory"));
 $("#removeDeviceButton").addEventListener("click", async () => {
   const device = state.detailDevice;
   if (!device) return;
@@ -2815,7 +2831,7 @@ $("#removeDeviceButton").addEventListener("click", async () => {
   button.disabled = true;
   try {
     await api(`/api/v1/admin/devices/${device.id}`, { method: "DELETE" });
-    $("#deviceDialog").close();
+    setPage(state.detailOriginPage || "inventory");
     showNotice(`${device.hostname} was removed from the fleet.`);
     await refresh();
   } catch (error) {

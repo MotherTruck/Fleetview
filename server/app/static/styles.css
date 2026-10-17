@@ -152,11 +152,13 @@ dialog label, .modal-panel label { display: grid; gap: 8px; color: var(--soft); 
 .modal-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.7); backdrop-filter: blur(4px); }
 .modal-overlay[hidden] { display: none; }
 .dialog-actions { display: flex; justify-content: end; gap: 8px; margin-top: 20px; }
-/* Full-viewport rather than a centered box: device details grew too many
-   tabs/sections (monitoring charts, drives, top consumers, containers,
-   terminal, files...) to stay usable as a 1100px modal. */
-.device-dialog { width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; border-radius: 0; padding: 0; overflow: hidden; }
-.device-dialog::backdrop { background: var(--bg); }
+.device-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100vh - 40px); padding: 0; overflow: hidden; }
+/* Device details is its own page (data-page-panel="device-detail"), not a
+   dialog -- the top nav stays visible and clicking Inventory again returns
+   to the device list, rather than a takeover that hides everything else.
+   It's not a child of <main> in the markup, so it needs the same width/
+   centering main itself gets, applied directly. */
+#deviceDialog { width: min(1180px, calc(100% - 32px)); margin-left: auto; margin-right: auto; }
 .detail-header { display: flex; align-items: start; justify-content: space-between; gap: 20px; padding: 24px; border-bottom: 1px solid var(--border); }
 .detail-header .detail-subtitle { margin: 5px 0 0; color: var(--muted); }
 .detail-header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
@@ -170,13 +172,13 @@ dialog label, .modal-panel label { display: grid; gap: 8px; color: var(--soft); 
 .tab { padding: 8px 12px; color: var(--muted); background: transparent; }
 .tab.active { color: var(--ink); background: var(--accent); }
 .table-summary { margin: 0; padding: 0 24px 10px; color: var(--muted); font-size: .8rem; }
-.detail-table-wrap { max-height: 48vh; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.detail-table-wrap { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .detail-table-wrap thead { position: sticky; top: 0; z-index: 1; background: var(--panel); }
 .detail-table-wrap td, .detail-table-wrap th { white-space: nowrap; }
 .package-name { color: var(--text); font-weight: 700; }
-.detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; max-height: 53vh; padding: 0 24px 24px; overflow-y: auto; }
+.detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 0 24px 24px; }
 .detail-overview[hidden] { display: none; }
-.detail-monitoring { max-height: 57vh; padding: 0 24px 24px; overflow-y: auto; }
+.detail-monitoring { padding: 0 24px 24px; }
 .detail-monitoring[hidden] { display: none; }
 .monitoring-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .monitoring-heading h3 { margin: 0; }
