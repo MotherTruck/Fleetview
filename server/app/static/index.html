@@ -121,7 +121,18 @@
         <section class="panel">
           <div class="panel-heading">
             <div><p class="eyebrow">INVENTORY</p><h2>Managed devices</h2></div>
-            <input id="inventorySearch" type="search" placeholder="Filter devices" aria-label="Filter devices">
+            <div class="inventory-filters">
+              <select id="inventoryTagFilter" aria-label="Filter by tag"><option value="">All tags</option></select>
+              <input id="inventorySearch" type="search" placeholder="Filter devices" aria-label="Filter devices">
+            </div>
+          </div>
+          <div id="inventoryBulkBar" class="inventory-bulk-bar" hidden data-admin-only>
+            <span id="inventoryBulkCount"></span>
+            <button type="button" id="bulkScanNow" class="secondary">Scan now</button>
+            <button type="button" id="bulkInstallApproved" class="secondary">Install approved updates</button>
+            <button type="button" id="bulkAddTag" class="secondary">Add tag…</button>
+            <button type="button" id="bulkRemoveTag" class="secondary">Remove tag…</button>
+            <button type="button" id="bulkClearSelection" class="secondary">Clear selection</button>
           </div>
           <div id="inventoryDevices" class="inventory-devices"></div>
         </section>

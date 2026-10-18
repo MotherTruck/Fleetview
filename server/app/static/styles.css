@@ -120,6 +120,15 @@ body.remote-control-page { min-height: 100vh; display: flex; flex-direction: col
 .deploy-device-row .device-subtitle { color: var(--muted); font-size: .8rem; margin-top: 2px; }
 .inventory-card { padding: 19px; border: 1px solid var(--border); background: var(--surface); border-radius: 13px; }
 .inventory-card h3 { margin: 0 0 4px; }
+.inventory-filters { display: flex; gap: 10px; }
+.inventory-filters select { max-width: 180px; }
+.inventory-bulk-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 22px; border-bottom: 1px solid var(--border); background: var(--raised); }
+.inventory-bulk-bar #inventoryBulkCount { color: var(--soft); font-weight: 650; margin-right: 4px; }
+.device-top-main { display: flex; gap: 10px; min-width: 0; }
+.inventory-select { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+.tag-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.pill.tag-pill { background: var(--raised); color: var(--soft); text-transform: none; }
+.tags-editor input { max-width: 480px; }
 .inventory-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0; }
 .inventory-grid div { min-width: 0; padding: 11px; background: var(--raised); border-radius: 8px; }
 .inventory-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

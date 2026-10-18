@@ -15,6 +15,8 @@ const state = {
   enrollmentTokens: [],
   freshToken: null,
   deploySelected: new Set(),
+  inventorySelected: new Set(),
+  inventoryTagFilter: "",
   reportRows: [],
   reportFields: [],
   reportHistory: [],
@@ -1149,16 +1151,70 @@ function renderPatching() {
   }).join("") : '<div class="empty">No devices have enrolled.</div>';
 }
 
-function renderInventory() {
+// All distinct tags currently in use across the fleet, for the filter
+// dropdown and the bulk "remove tag" picker -- computed from state.devices
+// rather than a separate endpoint, since the full device list (tags
+// included, see device_view) is already loaded for anyone who can see
+// Inventory at all.
+function allKnownTags() {
+  const tags = new Set();
+  for (const device of state.devices) {
+    for (const tag of device.tags || []) tags.add(tag);
+  }
+  return [...tags].sort((a, b) => a.localeCompare(b));
+}
+
+function renderInventoryTagFilter() {
+  const select = $("#inventoryTagFilter");
+  const tags = allKnownTags();
+  const signature = tags.join("|");
+  if (select.dataset.signature === signature) {
+    select.value = state.inventoryTagFilter;
+    return;
+  }
+  select.dataset.signature = signature;
+  select.innerHTML = '<option value="">All tags</option>'
+    + tags.map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("");
+  select.value = state.inventoryTagFilter;
+}
+
+function renderInventoryBulkBar(visibleDevices) {
+  // Selection can hold ids that just scrolled out of the current filter --
+  // only count/act on ones still visible, so "Clear selection" after
+  // narrowing a filter doesn't surprise anyone by touching devices they
+  // can no longer see.
+  const visibleIds = new Set(visibleDevices.map((d) => d.id));
+  const selectedVisible = [...state.inventorySelected].filter((id) => visibleIds.has(id));
+  const bar = $("#inventoryBulkBar");
+  bar.hidden = selectedVisible.length === 0;
+  $("#inventoryBulkCount").textContent = `${selectedVisible.length} selected`;
+}
+
+function visibleInventoryDevices() {
   const filter = $("#inventorySearch").value.trim().toLowerCase();
-  const devices = state.devices.filter((device) => `${device.hostname} ${device.os_name} ${device.os_version}`.toLowerCase().includes(filter));
+  return state.devices.filter((device) => {
+    const matchesSearch = `${device.hostname} ${device.os_name} ${device.os_version}`.toLowerCase().includes(filter);
+    const matchesTag = !state.inventoryTagFilter || (device.tags || []).includes(state.inventoryTagFilter);
+    return matchesSearch && matchesTag;
+  });
+}
+
+function renderInventory() {
+  renderInventoryTagFilter();
+  const devices = visibleInventoryDevices();
+  const canBulkAct = state.user?.role === "admin";
   $("#inventoryDevices").innerHTML = devices.length ? devices.map((device) => {
     const inventory = device.inventory || {};
     const addresses = Array.isArray(inventory.ip_addresses) ? inventory.ip_addresses.join(", ") : "Unknown";
+    const tags = device.tags || [];
+    const tagPills = tags.length ? `<div class="tag-pills">${tags.map((tag) => `<span class="pill tag-pill">${escapeHtml(tag)}</span>`).join("")}</div>` : "";
     return `
       <article class="inventory-card">
         <div class="device-top">
-          <div><h3>${escapeHtml(device.display_name || device.hostname)}</h3><div class="device-subtitle">${escapeHtml([device.os_name, device.os_version, device.architecture].filter(Boolean).join(" · "))}</div></div>
+          <div class="device-top-main">
+            ${canBulkAct ? `<input type="checkbox" class="inventory-select" data-device-id="${escapeHtml(device.id)}" aria-label="Select ${escapeHtml(device.display_name || device.hostname)}" ${state.inventorySelected.has(device.id) ? "checked" : ""}>` : ""}
+            <div><h3>${escapeHtml(device.display_name || device.hostname)}</h3><div class="device-subtitle">${escapeHtml([device.os_name, device.os_version, device.architecture].filter(Boolean).join(" · "))}</div>${tagPills}</div>
+          </div>
           <div class="status ${device.online ? "online" : ""}"><span class="dot"></span>${device.online ? "Online" : "Offline"}</div>
         </div>
         <div class="inventory-grid">
@@ -1172,6 +1228,7 @@ function renderInventory() {
         <div class="device-actions"><button data-action="details" data-tab="overview" data-device-id="${escapeHtml(device.id)}">View device details</button></div>
       </article>`;
   }).join("") : '<div class="empty">No devices match this view.</div>';
+  renderInventoryBulkBar(devices);
   renderNetworkTopology();
 }
 
@@ -2093,6 +2150,12 @@ function renderOverview(device) {
       <div><dt>Last vulnerability scan</dt><dd>${escapeHtml(fullDate(device.last_vulnerability_scan_at))}</dd></div>
       <div><dt>Last successful patch</dt><dd>${escapeHtml(fullDate(device.last_patched_at))}</dd></div>
     </dl></section>
+    <section class="tags-editor"><p class="eyebrow">GROUPS</p>
+      <label>Tags (comma-separated, used for grouping and bulk actions)
+        <input id="deviceTagsInput" type="text" value="${escapeHtml((device.tags || []).join(", "))}" placeholder="e.g. production, site-ny, windows-servers" ${state.user?.role === "viewer" ? "disabled" : ""}>
+      </label>
+      ${state.user?.role !== "viewer" ? `<div class="device-actions"><button type="button" id="saveDeviceTags" data-device-id="${escapeHtml(device.id)}">Save tags</button></div>` : ""}
+    </section>
     ${wakeSection}`;
 }
 
@@ -2591,6 +2654,69 @@ $("#monitorDevices").addEventListener("keydown", (event) => {
   }
 });
 $("#inventorySearch").addEventListener("input", renderInventory);
+$("#inventoryTagFilter").addEventListener("change", (event) => {
+  state.inventoryTagFilter = event.target.value;
+  renderInventory();
+});
+$("#inventoryDevices").addEventListener("change", (event) => {
+  const checkbox = event.target.closest(".inventory-select");
+  if (!checkbox) return;
+  if (checkbox.checked) state.inventorySelected.add(checkbox.dataset.deviceId);
+  else state.inventorySelected.delete(checkbox.dataset.deviceId);
+  renderInventoryBulkBar(visibleInventoryDevices());
+});
+$("#bulkClearSelection").addEventListener("click", () => {
+  state.inventorySelected.clear();
+  renderInventory();
+});
+// Shared by every bulk-action button: runs `action` for each selected
+// device id, tolerating individual failures (a device that's offline or
+// already has a conflicting job queued shouldn't abort the whole batch),
+// then reports how many succeeded.
+async function runBulkAction(label, action) {
+  const ids = [...state.inventorySelected];
+  if (!ids.length) return;
+  if (!confirm(`${label} for ${ids.length} selected device(s)?`)) return;
+  let succeeded = 0;
+  const errors = [];
+  for (const id of ids) {
+    try {
+      await action(id);
+      succeeded += 1;
+    } catch (error) {
+      const device = state.devices.find((item) => item.id === id);
+      errors.push(`${device?.display_name || device?.hostname || id}: ${error.message}`);
+    }
+  }
+  showNotice(
+    errors.length ? `${succeeded}/${ids.length} succeeded. Failures: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? "…" : ""}` : `${label} queued for ${succeeded} device(s).`,
+    errors.length > 0,
+  );
+  await refresh();
+}
+$("#bulkScanNow").addEventListener("click", () =>
+  runBulkAction("Scan", (id) => api(`/api/v1/admin/devices/${id}/jobs`, { method: "POST", body: JSON.stringify({ type: "SCAN_DEVICE" }) })));
+$("#bulkInstallApproved").addEventListener("click", () =>
+  runBulkAction("Install approved updates", (id) => api(`/api/v1/admin/devices/${id}/deploy-approved-patches`, { method: "POST" })));
+$("#bulkAddTag").addEventListener("click", async () => {
+  const tag = prompt("Tag to add to all selected devices:")?.trim();
+  if (!tag) return;
+  await runBulkAction(`Add tag "${tag}"`, async (id) => {
+    const device = state.devices.find((item) => item.id === id);
+    const tags = new Set(device?.tags || []);
+    tags.add(tag);
+    await api(`/api/v1/admin/devices/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags: [...tags] }) });
+  });
+});
+$("#bulkRemoveTag").addEventListener("click", async () => {
+  const tag = prompt("Tag to remove from all selected devices:")?.trim();
+  if (!tag) return;
+  await runBulkAction(`Remove tag "${tag}"`, async (id) => {
+    const device = state.devices.find((item) => item.id === id);
+    const tags = (device?.tags || []).filter((existing) => existing.toLowerCase() !== tag.toLowerCase());
+    await api(`/api/v1/admin/devices/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) });
+  });
+});
 $("#deployDeviceSearch").addEventListener("input", renderDeployDevices);
 $("#deployDeviceList").addEventListener("change", (event) => {
   const checkbox = event.target.closest("[data-deploy-device]");
@@ -2948,6 +3074,27 @@ $("#deviceDialog").addEventListener("click", async (event) => {
     showNotice(`Wake-on-LAN packet sent for ${device.display_name || device.hostname}.`);
   } catch (error) { showNotice(error.message, true); }
   finally { button.disabled = false; }
+});
+$("#deviceDialog").addEventListener("click", async (event) => {
+  const button = event.target.closest("#saveDeviceTags");
+  if (!button) return;
+  const tags = $("#deviceTagsInput").value.split(",").map((t) => t.trim()).filter(Boolean);
+  button.disabled = true;
+  try {
+    const result = await api(`/api/v1/admin/devices/${button.dataset.deviceId}/tags`, {
+      method: "PUT",
+      body: JSON.stringify({ tags }),
+    });
+    const device = state.devices.find((item) => item.id === button.dataset.deviceId);
+    if (device) device.tags = result.tags;
+    if (state.detailDevice?.id === button.dataset.deviceId) state.detailDevice.tags = result.tags;
+    showNotice("Tags saved.");
+    renderInventory();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
 $("#monitoringLive").addEventListener("click", (event) => {

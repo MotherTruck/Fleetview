@@ -39,6 +39,7 @@ pub fn router() -> Router<Arc<AppState>> {
             get(get_device).delete(delete_device),
         )
         .route("/api/v1/admin/devices/:id/settings", put(update_device_settings))
+        .route("/api/v1/admin/devices/:id/tags", put(update_device_tags))
         .route("/api/v1/admin/devices/:id/metrics", get(get_device_metrics))
         .route("/api/v1/admin/devices/:id/container-metrics", get(get_device_container_metrics))
         .route(
@@ -255,6 +256,7 @@ fn device_view(device: &Device, fleet: &FleetSettings, hub: &crate::live::LiveHu
         "last_patched_at": patching.get("last_patched_at"),
         "metrics": monitoring.get("current"),
         "agent_settings": agent_settings,
+        "tags": inventory.get("_tags").cloned().unwrap_or_else(|| json!([])),
     });
     if include_packages {
         let obj = result.as_object_mut().unwrap();
@@ -950,6 +952,56 @@ async fn update_device_settings(
         fleet.default_metrics_interval_seconds,
         fleet.default_inventory_interval_seconds,
     )))
+}
+
+const MAX_TAGS_PER_DEVICE: usize = 32;
+const MAX_TAG_LENGTH: usize = 64;
+
+#[derive(Deserialize)]
+struct TagsUpdatePayload {
+    tags: Vec<String>,
+}
+
+/// Tags live in inventory._tags (free-form strings), the same
+/// stash-it-in-the-JSONB-column convention _agent_settings/_patching/
+/// _monitoring already use elsewhere in this file -- grouping/bulk-
+/// targeting devices is lightweight metadata, not something that needs
+/// its own table with foreign keys and a migration.
+async fn update_device_tags(
+    State(state): State<Arc<AppState>>,
+    _operator: Operator,
+    Path(id): Path<String>,
+    Json(payload): Json<TagsUpdatePayload>,
+) -> Result<Json<Value>, ApiError> {
+    if payload.tags.len() > MAX_TAGS_PER_DEVICE {
+        return Err(ApiError::bad_request(format!("A device can have at most {MAX_TAGS_PER_DEVICE} tags")));
+    }
+    let mut tags: Vec<String> = Vec::new();
+    for raw in &payload.tags {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.len() > MAX_TAG_LENGTH {
+            return Err(ApiError::bad_request(format!("Tags must be {MAX_TAG_LENGTH} characters or fewer")));
+        }
+        let normalized = trimmed.to_string();
+        if !tags.iter().any(|existing| existing.eq_ignore_ascii_case(&normalized)) {
+            tags.push(normalized);
+        }
+    }
+    tags.sort_by_key(|tag| tag.to_lowercase());
+    let Some(device) = fetch_device(&state, &id).await? else {
+        return Err(ApiError::not_found("Device not found"));
+    };
+    let mut inventory = as_object(&device.inventory);
+    inventory.insert("_tags".to_string(), json!(tags));
+    sqlx::query("UPDATE devices SET inventory = $1 WHERE id = $2")
+        .bind(Value::Object(inventory))
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(json!({ "tags": tags })))
 }
 
 #[derive(Deserialize)]
