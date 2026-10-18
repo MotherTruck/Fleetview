@@ -2,6 +2,7 @@ mod accounts;
 mod alerting;
 mod auth;
 mod connectors;
+mod cve_enrichment;
 mod db;
 mod deployment;
 mod devices;

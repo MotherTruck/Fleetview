@@ -544,6 +544,16 @@ async fn report_vulnerabilities(
     updated.last_seen = Utc::now();
     record_compliance_snapshot(&mut tx, &updated).await?;
     tx.commit().await?;
+
+    // Fire-and-forget: NVD can be slow or rate-limited, and must never add
+    // latency to the agent's own report request.
+    let db = state.db.clone();
+    let device_id = updated.id.clone();
+    let scanned_at = payload.scanned_at;
+    tokio::spawn(async move {
+        crate::cve_enrichment::enrich_device_vulnerabilities(db, device_id, scanned_at).await;
+    });
+
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -658,9 +658,12 @@ function usageBar(percent, tone = "green") {
   return `<div class="usage-track" aria-hidden="true"><span class="${tone}" style="width:${value.toFixed(1)}%"></span></div>`;
 }
 
-function severityPill(severity) {
+function severityPill(severity, item) {
   const normalized = String(severity || "UNKNOWN").toUpperCase();
-  return `<span class="pill severity-${normalized.toLowerCase()}">${escapeHtml(normalized)}</span>`;
+  const title = item?.severity_source === "nvd"
+    ? ` title="Scored from the CVE's published NVD data${item.cvss_score != null ? ` (CVSS ${item.cvss_score})` : ""}, since the OS-native scanner reported no severity of its own"`
+    : "";
+  return `<span class="pill severity-${normalized.toLowerCase()}"${title}>${escapeHtml(normalized)}</span>`;
 }
 
 function exposurePill(item) {
@@ -2456,7 +2459,7 @@ function renderDeviceDetails() {
     $("#detailTableBody").innerHTML = visible.length ? visible.map((item) => {
       const url = safeUrl(item.primary_url);
       const id = url === "#" ? escapeHtml(item.vulnerability_id) : `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.vulnerability_id)}</a>`;
-      return `<tr title="${escapeHtml(item.title || "")}"><td>${severityPill(item.severity)}</td><td>${id}</td><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.fixed_version || "Not available")}</code></td><td>${escapeHtml(item.status)}</td><td>${exposurePill(item)}</td></tr>`;
+      return `<tr title="${escapeHtml(item.title || "")}"><td>${severityPill(item.severity, item)}</td><td>${id}</td><td class="package-name">${escapeHtml(item.package)}</td><td><code>${escapeHtml(item.installed_version)}</code></td><td><code>${escapeHtml(item.fixed_version || "Not available")}</code></td><td>${escapeHtml(item.status)}</td><td>${exposurePill(item)}</td></tr>`;
     }).join("") : '<tr><td colspan="7" class="empty">No vulnerabilities match this view. Run a vulnerability scan if one has not completed yet.</td></tr>';
     $("#detailFootnote").textContent = `Scanner: ${device.vulnerability_scanner || "Not yet scanned"} ${device.vulnerability_scanner_version || ""} · Last scan: ${fullDate(device.last_vulnerability_scan_at)} · "Listening" means a process matching the vulnerable package name is bound to a network port on this device -- a heuristic name match, not a guarantee.`;
   } else {
