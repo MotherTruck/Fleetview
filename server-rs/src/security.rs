@@ -60,6 +60,18 @@ pub fn password_hash(value: &str) -> String {
     )
 }
 
+/// Runs verify_password on a blocking-pool thread: 600,000 PBKDF2
+/// iterations is tens of milliseconds of pure CPU work, long enough on a
+/// hot path like login (run on every attempt, including failed ones
+/// against the fixed dummy hash) that doing it directly on a tokio worker
+/// thread would starve every other request that worker could otherwise be
+/// serving.
+pub async fn verify_password_async(value: String, encoded: String) -> bool {
+    tokio::task::spawn_blocking(move || verify_password(&value, &encoded))
+        .await
+        .unwrap_or(false)
+}
+
 pub fn verify_password(value: &str, encoded: &str) -> bool {
     let parts: Vec<&str> = encoded.splitn(4, '$').collect();
     let [algorithm, iterations, salt_hex, expected_hex] = parts.as_slice() else {

@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::auth::{Admin, CurrentUser, SESSION_COOKIE};
 use crate::error::ApiError;
-use crate::security::{new_agent_token, password_hash, secure_equal, token_hash, verify_password};
+use crate::security::{new_agent_token, password_hash, secure_equal, token_hash, verify_password, verify_password_async};
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -339,7 +339,11 @@ async fn login(
         .as_ref()
         .map(|u| u.password_hash.clone())
         .unwrap_or_else(|| dummy_hash().to_string());
-    let valid = verify_password(&payload.password, &hash_to_check);
+    // Off the async executor: 600,000 PBKDF2 iterations is tens of
+    // milliseconds of pure CPU work, long enough on a hot login endpoint
+    // (every attempt, including failed ones against the dummy hash above)
+    // to starve other requests on the same worker thread.
+    let valid = verify_password_async(payload.password.clone(), hash_to_check).await;
 
     let Some(user) = user else {
         return Err(ApiError::unauthorized("Invalid username or password"));
