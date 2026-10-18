@@ -55,14 +55,32 @@ To remove an agent later: `sudo fleetview-agent-uninstall` (Linux/OPNsense) or `
 
 ## Reaching it from other devices
 
-`127.0.0.1` only works from the same machine. To make the dashboard reachable from the rest of your network:
+`127.0.0.1` only works from the same machine. Once you open the dashboard to
+the rest of your network, everything that crosses it — your admin session
+cookie, every agent's credentials, the patch/command jobs you run, the
+inventory data agents report — is worth protecting, because anyone else on
+that network can otherwise read or tamper with it in transit.
+
+**Recommended: enable TLS first, then point agents at the HTTPS address.**
+This takes one extra step over plain HTTP and the install scripts handle
+certificate trust for you automatically — see [`docs/TLS.md`](docs/TLS.md)
+for the full walkthrough, or the short version:
+
+1. In `.env`, set `FLEETVIEW_TLS_HOSTNAME` to this machine's LAN address or
+   hostname, and `FLEETVIEW_COOKIE_SECURE=true`.
+2. `sudo docker compose --profile tls up -d`
+3. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
+   `https://...:8443` address as the server URL when enrolling every agent.
+
+**Plain HTTP instead, only if you understand the tradeoff** (e.g. a LAN you
+already fully trust and control):
 
 1. Find this machine's LAN address: `ip -4 addr show scope global`
 2. In `.env`, set `FLEETVIEW_BIND_ADDRESS` to that address (or `0.0.0.0` on a trusted network).
 3. Apply it: `sudo docker compose up -d`
 4. Point agents on other devices at that same address.
 
-Never expose the server directly to the internet without HTTPS in front of it — see [`docs/TLS.md`](docs/TLS.md).
+Either way, never expose the server directly to the internet without HTTPS in front of it.
 
 ## Everyday operations
 
