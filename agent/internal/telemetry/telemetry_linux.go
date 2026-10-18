@@ -131,6 +131,22 @@ var pseudoFilesystems = map[string]bool{
 // with hundreds of mounts turning one metrics report into something huge.
 const maxDisks = 64
 
+// managedMountPrefixes are mount points owned by a container runtime or
+// kubelet rather than being a drive an admin would ever want to see in the
+// dashboard. These commonly bind-mount a real block device (so they pass
+// the /dev/ check below) at one path per pod volume/container layer, which
+// on a busy Kubernetes node means dozens to hundreds of entries -- one per
+// pod's emptyDir/configmap/secret/projected volume, recreated every time a
+// pod reschedules -- all backed by the same underlying root filesystem.
+var managedMountPrefixes = []string{
+	"/var/lib/kubelet/",
+	"/var/lib/docker/",
+	"/var/lib/containerd/",
+	"/var/lib/containers/",
+	"/run/containerd/",
+	"/run/docker/",
+}
+
 func readDisks() []model.Disk {
 	file, err := os.Open("/proc/mounts")
 	if err != nil {
@@ -154,6 +170,9 @@ func readDisks() []model.Disk {
 			// (host:/path, e.g. NFS) -- whatever it is, it's not a drive.
 			continue
 		}
+		if isManagedMount(mountPoint) {
+			continue
+		}
 		total, available := readDisk(mountPoint)
 		if total == 0 {
 			continue
@@ -167,6 +186,15 @@ func readDisks() []model.Disk {
 		})
 	}
 	return disks
+}
+
+func isManagedMount(mountPoint string) bool {
+	for _, prefix := range managedMountPrefixes {
+		if strings.HasPrefix(mountPoint, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readLoad() (float64, float64, float64) {
