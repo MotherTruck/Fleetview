@@ -1278,13 +1278,28 @@ function renderNetworkTopology() {
 
 const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", DOCKER_VOLUME_REMOVE: "Remove volume", DOCKER_VOLUME_PRUNE: "Prune volumes", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN", MIGRATE_SERVER: "Server migration" };
 
+// outcome_unknown is a terminal status (see server-rs's reap_stale_jobs):
+// the agent claimed this job and then never reported a result within its
+// lease window -- a crash, a lost completion POST, or the device never
+// coming back online. It does NOT mean the job failed; it genuinely isn't
+// known whether it succeeded, failed, or never ran, so it's surfaced
+// distinctly rather than folded into "failed" and never auto-retried.
+const jobStatusLabels = { outcome_unknown: "Outcome unknown" };
+function jobStatusCell(job) {
+  const label = jobStatusLabels[job.status] || job.status;
+  const title = job.status === "outcome_unknown"
+    ? ' title="The agent claimed this job but never reported back within the expected window. It may have succeeded, failed, or never run -- check the device directly if this matters."'
+    : "";
+  return `<span class="pill ${job.status}"${title}>${escapeHtml(label)}</span>`;
+}
+
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
   $("#jobs").innerHTML = state.jobs.length ? state.jobs.map((job) => `
     <tr>
       <td>${escapeHtml(job.type === "DOCKER_CONTAINER_ACTION" ? `Docker ${job.options?.action || "action"} · ${job.options?.container_id || ""}` : jobTypeLabels[job.type] || job.type)}</td>
       <td>${escapeHtml(names[job.device_id] || job.device_id)}</td>
-      <td><span class="pill ${job.status}">${escapeHtml(job.status)}</span></td>
+      <td>${jobStatusCell(job)}</td>
       <td>${relativeTime(job.created_at)}</td>
       <td>${escapeHtml(job.error || (job.exit_code === null ? "—" : `Exit ${job.exit_code}`))}</td>
     </tr>`).join("") : '<tr><td colspan="5" class="empty">No jobs yet.</td></tr>';
@@ -1328,7 +1343,7 @@ function renderDeployJobs() {
     <tr>
       <td class="package-name">${job.type === "UNINSTALL_PACKAGE" ? "Uninstall" : "Install"}: ${escapeHtml(job.options?.name || job.options?.package || "—")}</td>
       <td>${escapeHtml(names[job.device_id] || job.device_id)}</td>
-      <td><span class="pill ${job.status}">${escapeHtml(job.status)}</span></td>
+      <td>${jobStatusCell(job)}</td>
       <td>${relativeTime(job.created_at)}</td>
       <td>${escapeHtml(job.error || (job.exit_code === null ? "—" : `Exit ${job.exit_code}`))}</td>
     </tr>`).join("") : '<tr><td colspan="5" class="empty">No deployments yet.</td></tr>';

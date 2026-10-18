@@ -31,6 +31,12 @@ services:
       # Optional legacy shared token. Leave unset to accept only one-time per-device tokens.
       ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
       METRICS_RETENTION_DAYS: "7"
+      # How long (seconds) a job may sit "running" with no completion
+      # report before it's recovered as outcome_unknown -- see
+      # devices.rs's reap_stale_jobs. 1800s (30 min) comfortably covers
+      # every built-in job type; raise it if you deploy custom scripts
+      # that legitimately run longer than that.
+      FLEETVIEW_JOB_LEASE_SECONDS: ${FLEETVIEW_JOB_LEASE_SECONDS:-1800}
       FLEETVIEW_COOKIE_SECURE: ${FLEETVIEW_COOKIE_SECURE:-false}
       # Required only if you configure a Proxmox/OPNsense integration (docs/INTEGRATIONS.md).
       FLEETVIEW_SECRET_KEY: ${FLEETVIEW_SECRET_KEY:-}

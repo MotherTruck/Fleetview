@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"fleetview-agent/internal/config"
 	"fleetview-agent/internal/model"
@@ -149,8 +150,33 @@ func (c *Client) NextJob(ctx context.Context) (*model.Job, error) {
 	return &result, nil
 }
 
+// completeJobBackoff bounds how many times CompleteJob retries, and how
+// long it waits between attempts. By the time this runs, the agent has
+// already executed the job and knows its real outcome -- losing that to
+// one transient network blip would otherwise strand the job "running" on
+// the server until its lease expires (server-rs's reap_stale_jobs), even
+// though the agent itself never lost track of what happened. This is a
+// bounded, in-process retry, not a crash-durable queue: if the agent
+// process itself dies mid-retry, the server's lease recovery is still the
+// backstop that eventually surfaces the job as outcome_unknown.
+var completeJobBackoff = []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
+
 func (c *Client) CompleteJob(ctx context.Context, jobID string, result model.JobResult) error {
-	return c.request(ctx, http.MethodPost, "/api/v1/agent/jobs/"+jobID+"/result", result, nil, true)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		lastErr = c.request(ctx, http.MethodPost, "/api/v1/agent/jobs/"+jobID+"/result", result, nil, true)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt >= len(completeJobBackoff) {
+			return lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return lastErr
+		case <-time.After(completeJobBackoff[attempt]):
+		}
+	}
 }
 
 type BundleFile struct {

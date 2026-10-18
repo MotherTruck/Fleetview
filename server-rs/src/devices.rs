@@ -12,7 +12,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -802,7 +802,13 @@ async fn complete_job(
         return Err(ApiError::not_found("Job not found"));
     }
     let status: String = row.get("status");
-    if status != "running" {
+    // A job the lease-reaper already marked outcome_unknown (see
+    // reap_stale_jobs) still accepts a late completion report: the agent
+    // genuinely executed it and knows what happened, which is strictly
+    // more useful than leaving the record as "unknown" forever. Only a
+    // genuinely terminal status (succeeded/failed already recorded) is
+    // rejected, to guard against a replayed or duplicate report.
+    if status != "running" && status != "outcome_unknown" {
         return Err(ApiError::conflict("Job is not running"));
     }
     let job_type: String = row.get("type");
@@ -858,6 +864,88 @@ async fn complete_job(
         });
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// How long a job may sit "running" (claimed_at) before the sweep below
+/// gives up waiting for a completion report and marks it outcome_unknown.
+/// Generous relative to how long any job type here actually takes (the
+/// slowest -- patch/software deployment, an arbitrary RUN_SCRIPT -- still
+/// normally finishes in single-digit minutes); configurable in seconds
+/// (rather than a coarser minutes/hours unit) both for a fleet with
+/// unusually long-running custom scripts and so an integration test can
+/// set a short lease without a multi-minute sleep.
+fn job_lease_seconds() -> i64 {
+    std::env::var("FLEETVIEW_JOB_LEASE_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(1800)
+}
+
+fn job_reap_interval_seconds() -> u64 {
+    std::env::var("FLEETVIEW_JOB_REAP_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300)
+}
+
+const STALE_JOB_ERROR: &str =
+    "Agent did not report a result within the lease window; its actual outcome is unknown.";
+
+/// Recovers jobs an agent claimed and then never reported back on -- a
+/// crash, a lost completion POST, or the device simply never coming back
+/// online -- which would otherwise sit "running" forever. That's not just
+/// a stale-looking row: devices.rs's own scheduled-scan/patch dedup checks
+/// (e.g. queue_scheduled_scan) treat any pending-or-running job as "one's
+/// already in flight" and skip queuing a new one, so a stuck job silently
+/// blocks every future equivalent job too.
+///
+/// Deliberately does NOT retry or recreate the job -- the review comment
+/// this exists for is explicit that auto-rerunning a job whose outcome is
+/// unknown (it may have actually succeeded, or be a destructive command
+/// still mid-flight) is itself risky. outcome_unknown is a terminal,
+/// clearly-labeled dead end an admin decides what to do about, same as
+/// they would a failed job -- complete_job still accepts a late report for
+/// one of these (see its own comment) if the agent does eventually check
+/// back in.
+pub async fn reap_stale_jobs(pool: &PgPool) {
+    let cutoff = Utc::now() - Duration::seconds(job_lease_seconds());
+    let stale = sqlx::query(
+        "UPDATE jobs SET status = 'outcome_unknown', completed_at = now(), error = $1 \
+         WHERE status = 'running' AND claimed_at < $2 \
+         RETURNING id, device_id, type",
+    )
+    .bind(STALE_JOB_ERROR)
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await;
+    let Ok(stale) = stale else { return };
+    for row in stale {
+        let job_id: String = row.get("id");
+        let device_id: String = row.get("device_id");
+        let job_type: String = row.get("type");
+        tracing::warn!("job {job_id} ({job_type}) on device {device_id} timed out waiting for a completion report; marked outcome_unknown");
+        let device = sqlx::query_as::<_, Device>(
+            "SELECT id, hostname, display_name, platform, os_name, os_version, architecture, \
+             package_manager, agent_version, agent_token_hash, enrolled_at, last_seen, inventory, \
+             installed_packages, available_updates, update_count, security_update_count, last_scan_at \
+             FROM devices WHERE id = $1",
+        )
+        .bind(&device_id)
+        .fetch_optional(pool)
+        .await;
+        if let Ok(Some(device)) = device {
+            crate::alerting::notify_job_failed(pool, &device, &job_type, &job_id, Some(STALE_JOB_ERROR)).await;
+        }
+    }
+}
+
+pub async fn reap_stale_jobs_loop(pool: PgPool) {
+    loop {
+        reap_stale_jobs(&pool).await;
+        tokio::time::sleep(std::time::Duration::from_secs(job_reap_interval_seconds())).await;
+    }
 }
 
 // -- admin-facing endpoints --

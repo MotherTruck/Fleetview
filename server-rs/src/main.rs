@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect().await?;
     tokio::spawn(integrations::periodic_sync_loop(pool.clone()));
     tokio::spawn(alerting::evaluate_loop(pool.clone()));
+    tokio::spawn(devices::reap_stale_jobs_loop(pool.clone()));
     let state = Arc::new(AppState { db: pool, hub: live::LiveHub::new() });
 
     let static_dir = std::env::var("FLEETVIEW_STATIC_DIR").unwrap_or_else(|_| "static".to_string());

@@ -149,6 +149,7 @@ th { color: var(--muted); font-weight: 650; }
 .pill.failed { color: #ff9c9c; background: #402020; }
 .pill.running { color: #8fc8ff; background: #19334b; }
 .pill.pending { color: #f7d488; background: #3c3017; }
+.pill.outcome_unknown { color: #ffc999; background: #4a2c12; }
 .pill.severity-critical { color: #ffd6d6; background: #6a2424; }
 .pill.severity-high { color: #ffd6b5; background: #63351b; }
 .pill.severity-medium { color: #ffeaa3; background: #554716; }
