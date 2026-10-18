@@ -11,8 +11,16 @@ down:
 logs:
 	docker compose logs -f server
 
+# Runs the real test suites (server-rs's integration tests need a local
+# Postgres reachable as `sudo -u postgres psql`, with a `fleetview` role
+# that owns the per-test databases it creates and drops -- see
+# server-rs/tests/common/mod.rs -- and the agent's cross-platform build
+# checks need no services at all). server/tests (the Python implementation
+# this replaced) is retired and no longer run here.
 test:
-	python3 -m unittest discover -s server/tests -v
+	cd server-rs && cargo test -- --test-threads=4
+	cd agent && go build ./... && go vet ./... && go test ./...
+	cd agent && GOOS=windows go build ./... && GOOS=freebsd go build ./...
 
 agent:
 	cd agent && go build -trimpath -ldflags="-s -w" -o bin/fleetview-agent ./cmd/fleetview-agent

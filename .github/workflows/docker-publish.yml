@@ -23,7 +23,50 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/fleetview-server
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Postgres and create the fleetview role
+        # server-rs's integration tests shell out to `sudo -u postgres
+        # psql` directly (see server-rs/tests/common/mod.rs) rather than
+        # reaching Postgres over TCP, so this needs the runner's own local
+        # Postgres install (ubuntu-latest ships one, just not started) --
+        # a `postgres:` services container wouldn't give that OS-level
+        # `postgres` user to sudo into.
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "CREATE ROLE fleetview LOGIN PASSWORD 'fleetview' CREATEDB;"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-rs
+
+      - name: cargo test (server-rs)
+        working-directory: server-rs
+        run: cargo test -- --test-threads=4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+
+      - name: go build/vet/test (agent, all platforms)
+        working-directory: agent
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+          GOOS=windows go build ./...
+          GOOS=freebsd go build ./...
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
