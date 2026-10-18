@@ -73,6 +73,7 @@ func (c *Collector) Collect(gpuMonitoringEnabled bool) (model.MetricsReport, err
 	disks := readDisks()
 	load1, load5, load15 := readLoad()
 	temperature := readTemperature()
+	gpus, gpuProcesses := collectGPUsAndProcesses(gpuMonitoringEnabled)
 
 	return model.MetricsReport{
 		RecordedAt:           now.UTC(),
@@ -93,7 +94,8 @@ func (c *Collector) Collect(gpuMonitoringEnabled bool) (model.MetricsReport, err
 		ProcessCount:         processCount(),
 		TemperatureCelsius:   temperature,
 		UptimeSeconds:        uptimeSeconds(),
-		GPUs:                 collectGPUs(gpuMonitoringEnabled),
+		GPUs:                 gpus,
+		GPUProcesses:         gpuProcesses,
 		Disks:                disks,
 	}, nil
 }

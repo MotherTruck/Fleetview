@@ -577,6 +577,8 @@ pub(crate) struct MetricsReportPayload {
     #[serde(default)]
     gpus: Vec<Value>,
     #[serde(default)]
+    gpu_processes: Vec<Value>,
+    #[serde(default)]
     top_consumers: Vec<Value>,
     #[serde(default)]
     disks: Vec<Value>,

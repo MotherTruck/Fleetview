@@ -104,6 +104,7 @@ type MetricsReport struct {
 	TemperatureCelsius   *float64           `json:"temperature_celsius,omitempty"`
 	UptimeSeconds        uint64             `json:"uptime_seconds"`
 	GPUs                 []GPU              `json:"gpus"`
+	GPUProcesses         []GPUProcess       `json:"gpu_processes"`
 	TopConsumers         []ResourceConsumer `json:"top_consumers"`
 	Disks                []Disk             `json:"disks"`
 }
@@ -122,6 +123,7 @@ type Disk struct {
 
 type GPU struct {
 	Index              string   `json:"index"`
+	UUID               string   `json:"uuid,omitempty"`
 	Name               string   `json:"name"`
 	Vendor             string   `json:"vendor"`
 	UtilizationPercent *float64 `json:"utilization_percent,omitempty"`
@@ -129,6 +131,18 @@ type GPU struct {
 	MemoryTotalBytes   *uint64  `json:"memory_total_bytes,omitempty"`
 	TemperatureCelsius *float64 `json:"temperature_celsius,omitempty"`
 	PowerWatts         *float64 `json:"power_watts,omitempty"`
+}
+
+// GPUProcess is one entry from `nvidia-smi --query-compute-apps`: a process
+// currently holding GPU memory on a specific card. Collected every tick
+// alongside the GPU cards themselves (see gpu.go's collectNVIDIAProcesses)
+// since the query is cheap -- it's the dashboard, not the agent, that
+// defers showing this list until an admin expands a GPU card.
+type GPUProcess struct {
+	GPUUUID         string `json:"gpu_uuid,omitempty"`
+	PID             int    `json:"pid"`
+	Name            string `json:"name"`
+	MemoryUsedBytes uint64 `json:"memory_used_bytes"`
 }
 
 type AgentSettings struct {

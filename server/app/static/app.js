@@ -45,6 +45,8 @@ const state = {
   filesEditingPath: null,
   filesEditingTruncated: false,
   topConsumersSort: "cpu_percent",
+  topConsumersSortDir: "desc",
+  expandedGPUProcesses: new Set(),
 };
 
 const ACCENT_PRESETS = [
@@ -2016,11 +2018,26 @@ function renderMonitoringLive(device) {
   const swap = usagePercent(metrics.swap_used_bytes, metrics.swap_total_bytes);
   const temperature = metrics.temperature_celsius === null || metrics.temperature_celsius === undefined ? "Not reported" : `${Number(metrics.temperature_celsius).toFixed(1)}°C`;
   const gpus = Array.isArray(metrics.gpus) ? metrics.gpus : [];
+  const gpuProcesses = Array.isArray(metrics.gpu_processes) ? metrics.gpu_processes : [];
   const gpuCards = gpus.length ? `<section class="gpu-section"><div><p class="eyebrow">GPU MONITORING</p><h3>Graphics processors</h3></div><div class="gpu-grid">${gpus.map((gpu) => {
     const gpuMemory = usagePercent(gpu.memory_used_bytes, gpu.memory_total_bytes);
     const temperatureValue = gpu.temperature_celsius === null || gpu.temperature_celsius === undefined ? "Not reported" : `${Number(gpu.temperature_celsius).toFixed(1)}°C`;
     const powerValue = gpu.power_watts === null || gpu.power_watts === undefined ? "Not reported" : `${Number(gpu.power_watts).toFixed(1)} W`;
-    return `<article><div class="gpu-title"><div><small>${escapeHtml(gpu.vendor)}</small><strong>${escapeHtml(gpu.name)}</strong></div><span>GPU ${escapeHtml(gpu.index)}</span></div><dl><div><dt>Utilization</dt><dd>${formatPercent(gpu.utilization_percent)}</dd></div><div><dt>VRAM</dt><dd>${gpu.memory_total_bytes ? formatUsage(gpu.memory_used_bytes, gpu.memory_total_bytes) : "Not reported"}</dd></div><div><dt>Temperature</dt><dd>${escapeHtml(temperatureValue)}</dd></div><div><dt>Power</dt><dd>${escapeHtml(powerValue)}</dd></div></dl>${usageBar(gpu.utilization_percent)}${gpuMemory === null ? "" : usageBar(gpuMemory, "blue")}</article>`;
+    const gpuKey = gpu.uuid || gpu.index;
+    // A process list only has a gpu_uuid to key off when the agent can tell
+    // GPUs apart (NVIDIA); with exactly one GPU reported, show everything
+    // under it regardless, since there's nothing else it could belong to.
+    const processes = gpuProcesses.filter((p) => (gpu.uuid && p.gpu_uuid ? p.gpu_uuid === gpu.uuid : gpus.length === 1));
+    const expanded = state.expandedGPUProcesses.has(gpuKey);
+    const processesSection = processes.length ? `
+      <button type="button" class="secondary gpu-processes-toggle" data-gpu-toggle="${escapeHtml(gpuKey)}">${expanded ? "Hide" : "Show"} processes (${processes.length})</button>
+      ${expanded ? `<div class="table-wrap">
+        <table>
+          <thead><tr><th>PID</th><th>Process</th><th>VRAM</th></tr></thead>
+          <tbody>${processes.map((p) => `<tr><td>${escapeHtml(p.pid)}</td><td class="package-name">${escapeHtml(p.name || "Unknown")}</td><td>${formatBytes(p.memory_used_bytes)}</td></tr>`).join("")}</tbody>
+        </table>
+      </div>` : ""}` : "";
+    return `<article><div class="gpu-title"><div><small>${escapeHtml(gpu.vendor)}</small><strong>${escapeHtml(gpu.name)}</strong></div><span>GPU ${escapeHtml(gpu.index)}</span></div><dl><div><dt>Utilization</dt><dd>${formatPercent(gpu.utilization_percent)}</dd></div><div><dt>VRAM</dt><dd>${gpu.memory_total_bytes ? formatUsage(gpu.memory_used_bytes, gpu.memory_total_bytes) : "Not reported"}</dd></div><div><dt>Temperature</dt><dd>${escapeHtml(temperatureValue)}</dd></div><div><dt>Power</dt><dd>${escapeHtml(powerValue)}</dd></div></dl>${usageBar(gpu.utilization_percent)}${gpuMemory === null ? "" : usageBar(gpuMemory, "blue")}${processesSection}</article>`;
   }).join("")}</div></section>` : '<section class="gpu-section empty-gpu"><p>No supported GPU telemetry was detected on this device.</p></section>';
 
   const disks = Array.isArray(metrics.disks) ? metrics.disks : [];
@@ -2046,7 +2063,14 @@ function renderMonitoringLive(device) {
 
   const consumers = Array.isArray(metrics.top_consumers) ? [...metrics.top_consumers] : [];
   const sortKey = state.topConsumersSort;
-  consumers.sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
+  const sortDir = state.topConsumersSortDir === "asc" ? 1 : -1;
+  const stringKeys = new Set(["kind", "name"]);
+  consumers.sort((a, b) => {
+    if (stringKeys.has(sortKey)) {
+      return sortDir * String(a[sortKey] || "").localeCompare(String(b[sortKey] || ""));
+    }
+    return sortDir * ((Number(a[sortKey]) || 0) - (Number(b[sortKey]) || 0));
+  });
   const consumerRows = consumers.length ? consumers.map((item) => `
     <tr>
       <td><span class="pill ${item.kind === "container" ? "succeeded" : "unknown"}">${escapeHtml(item.kind)}</span></td>
@@ -2055,7 +2079,9 @@ function renderMonitoringLive(device) {
       <td>${formatPercent(item.cpu_percent)}</td>
       <td>${formatBytes(item.memory_bytes)}</td>
     </tr>`).join("") : '<tr><td colspan="5" class="empty">No process/container data reported yet -- requires agent 0.22.0 or later.</td></tr>';
-  const sortArrow = (key) => sortKey === key ? " ▾" : "";
+  const sortArrow = (key) => sortKey === key ? (state.topConsumersSortDir === "asc" ? " ▴" : " ▾") : "";
+  const sortHeader = (key, label) =>
+    `<th class="sortable ${sortKey === key ? "active" : ""}" data-consumer-sort="${key}">${label}${sortArrow(key)}</th>`;
   const topConsumersSection = `
     <section class="top-consumers-section">
       <div class="monitoring-heading">
@@ -2064,14 +2090,13 @@ function renderMonitoringLive(device) {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Kind</th><th>Name</th><th>PID</th>
-            <th class="sortable ${sortKey === "cpu_percent" ? "active" : ""}" data-consumer-sort="cpu_percent">CPU${sortArrow("cpu_percent")}</th>
-            <th class="sortable ${sortKey === "memory_bytes" ? "active" : ""}" data-consumer-sort="memory_bytes">Memory${sortArrow("memory_bytes")}</th>
+            ${sortHeader("kind", "Kind")}${sortHeader("name", "Name")}<th>PID</th>
+            ${sortHeader("cpu_percent", "CPU")}${sortHeader("memory_bytes", "Memory")}
           </tr></thead>
           <tbody>${consumerRows}</tbody>
         </table>
       </div>
-      <p class="form-note">Host processes and running Docker containers merged into one list: click a column to sort by it (deduplicated top entries, not a single blended score).</p>
+      <p class="form-note">Host processes and running Docker containers merged into one list: click a column to sort by it, click again to reverse direction (deduplicated top entries, not a single blended score).</p>
     </section>`;
 
   container.innerHTML = `
@@ -3325,10 +3350,28 @@ $("#deviceDialog").addEventListener("click", async (event) => {
 });
 $("#metricRange").addEventListener("change", loadMetricHistory);
 $("#monitoringLive").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-consumer-sort]");
-  if (!button) return;
-  state.topConsumersSort = button.dataset.consumerSort;
-  if (state.detailDevice) renderMonitoring(state.detailDevice);
+  const sortButton = event.target.closest("[data-consumer-sort]");
+  if (sortButton) {
+    const key = sortButton.dataset.consumerSort;
+    if (state.topConsumersSort === key) {
+      state.topConsumersSortDir = state.topConsumersSortDir === "asc" ? "desc" : "asc";
+    } else {
+      state.topConsumersSort = key;
+      state.topConsumersSortDir = key === "kind" || key === "name" ? "asc" : "desc";
+    }
+    if (state.detailDevice) renderMonitoring(state.detailDevice);
+    return;
+  }
+  const gpuButton = event.target.closest("[data-gpu-toggle]");
+  if (gpuButton) {
+    const key = gpuButton.dataset.gpuToggle;
+    if (state.expandedGPUProcesses.has(key)) {
+      state.expandedGPUProcesses.delete(key);
+    } else {
+      state.expandedGPUProcesses.add(key);
+    }
+    if (state.detailDevice) renderMonitoring(state.detailDevice);
+  }
 });
 $("#themeSwatches").addEventListener("click", (event) => {
   const button = event.target.closest("[data-accent]");
