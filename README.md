@@ -2,7 +2,7 @@
 
 A self-hosted dashboard for inventory, patching, and remote management of your own devices. The server runs in Docker; a small agent runs on each device you want to manage.
 
-Supported devices: Arch Linux/CachyOS, Debian/Ubuntu, and Windows.
+Supported devices: Arch Linux/CachyOS, Debian/Ubuntu, Windows, and OPNsense/FreeBSD.
 
 ## 1. Run the server
 
@@ -41,6 +41,8 @@ In the dashboard: **Agent → Add a new device**, pick its platform, and click *
 
 **Linux (Arch/CachyOS, Debian, Ubuntu):** copy the generated one-line command and run it on the device.
 
+**OPNsense/FreeBSD:** copy the generated one-line command and run it as root from the OPNsense console or an SSH session — it downloads a prebuilt agent binary (no Go toolchain needed on the firewall itself) and starts it as an rc.d service. "Remote control" for an OPNsense device opens its own web GUI instead of a screen session.
+
 **Windows:** install [Go](https://go.dev/dl/) and make sure `winget` is available (the **App Installer** package, present by default on current Windows 10/11), then from an elevated PowerShell prompt:
 
 ```powershell
@@ -49,7 +51,7 @@ In the dashboard: **Agent → Add a new device**, pick its platform, and click *
 
 That's it — the device shows up in **Inventory** once it checks in.
 
-To remove an agent later: `sudo fleetview-agent-uninstall` (Linux) or `.\scripts\uninstall-agent.ps1` (Windows).
+To remove an agent later: `sudo fleetview-agent-uninstall` (Linux/OPNsense) or `.\scripts\uninstall-agent.ps1` (Windows).
 
 ## Reaching it from other devices
 

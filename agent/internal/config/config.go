@@ -76,3 +76,35 @@ func Load(path string) (Config, error) {
 	}
 	return result, nil
 }
+
+// UpdateServerURL rewrites the FLEETVIEW_SERVER_URL line of the config
+// file at path in place (replacing it if present, appending it
+// otherwise), used by a MIGRATE_SERVER job to permanently re-point this
+// agent at a new management server. Every other line -- including the
+// enrollment token, which a device re-pointed to a freshly migrated
+// server doesn't need again -- is preserved exactly as written.
+func UpdateServerURL(path, newURL string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	lines := strings.Split(string(data), "\n")
+	replaced := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "FLEETVIEW_SERVER_URL=") || strings.HasPrefix(trimmed, "#FLEETVIEW_SERVER_URL=") {
+			lines[i] = fmt.Sprintf("FLEETVIEW_SERVER_URL=%s", newURL)
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		lines = append(lines, fmt.Sprintf("FLEETVIEW_SERVER_URL=%s", newURL))
+	}
+	info, err := os.Stat(path)
+	mode := os.FileMode(0600)
+	if err == nil {
+		mode = info.Mode()
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), mode)
+}

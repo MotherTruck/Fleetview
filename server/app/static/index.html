@@ -369,6 +369,7 @@
                   <option value="arch">Arch Linux / CachyOS</option>
                   <option value="debian">Debian</option>
                   <option value="ubuntu">Ubuntu</option>
+                  <option value="opnsense">OPNsense / FreeBSD</option>
                   <option value="windows">Windows</option>
                 </select>
               </label>
@@ -392,8 +393,8 @@
                 <p id="installCommandIntro">Generate a one-time token to get the install command for a new Linux device.</p>
                 <pre id="installCommandBlock" hidden><code id="installCommand"></code></pre>
                 <p id="installTokenMeta" class="form-note" hidden></p>
-                <div class="device-actions"><button id="copyInstallCommand" type="button" disabled>Copy command</button><a class="button-link secondary" href="/install/agent-source.tar.gz">Download Linux source bundle</a></div>
-                <p class="form-note">The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
+                <div class="device-actions"><button id="copyInstallCommand" type="button" disabled>Copy command</button><a id="installSourceBundle" class="button-link secondary" href="/install/agent-source.tar.gz">Download Linux source bundle</a></div>
+                <p id="installCommandNote" class="form-note">The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.</p>
               </div>
               <div id="windowsInstallOutput" hidden>
                 <p class="unsupported-note">Windows support is new and hasn't been verified on real Windows hardware yet. Expect rough edges.</p>
@@ -502,6 +503,31 @@
             <pre><code>FLEETVIEW_BIND_ADDRESS=127.0.0.1   # or a LAN/VM IP, or 0.0.0.0
 FLEETVIEW_PORT=8080</code></pre>
             <p class="form-note">After changing either value, run <code>docker compose up -d</code> on the Docker host to apply it. To check what's actually published right now (and diagnose access problems from another machine), run <code>./scripts/check-access.sh</code> there.</p>
+          </div>
+        </section>
+
+        <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">MOVE SERVER</p><h2>Server migration</h2></div></div>
+          <div class="panel-body">
+            <p class="form-note">Moves this server's entire database — every device, user, job history, and credential — to a freshly-provisioned FleetView server, then re-points every enrolled agent at it. The target must already be running an empty install (just completed its own first-time setup); this replaces whatever's there, it doesn't merge with it.</p>
+            <div class="migration-columns">
+              <div>
+                <h3>If this is the new server</h3>
+                <p class="form-note">Generate a token here, then paste it into the old server's "Migrate away from this server" form below.</p>
+                <button id="generateMigrationToken" type="button" class="secondary">Generate migration token</button>
+                <pre id="migrationTokenOutput" class="form-note" hidden><code id="migrationTokenValue"></code></pre>
+                <p id="migrationTokenMeta" class="form-note" hidden></p>
+              </div>
+              <div>
+                <h3>Migrate away from this server</h3>
+                <form id="migrationSendForm" class="settings-grid">
+                  <label>New server's URL<input id="migrationTargetURL" type="url" placeholder="https://new-server.example:8080" required></label>
+                  <label>Migration token (from the new server)<input id="migrationToken" type="text" autocomplete="off" required></label>
+                  <button type="submit">Migrate to this server</button>
+                </form>
+                <p id="migrationSendStatus" class="form-note" role="status"></p>
+              </div>
+            </div>
           </div>
         </section>
       </section>

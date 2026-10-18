@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.29.0"
+var version = "0.30.0"
 
 const serviceName = "fleetview-agent"
 
@@ -202,7 +202,7 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 				}
 			}
 		case <-jobTicker.C:
-			stagedUpgrade, err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled)
+			stagedUpgrade, restartNeeded, err := handleNextJob(ctx, api, manager, logger, settings.DockerInventoryEnabled, configPath)
 			if err != nil {
 				logger.Printf("job poll failed: %v", err)
 			}
@@ -214,6 +214,16 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 					// the detached helper takes over and this process exits.
 					logger.Printf("apply upgrade failed: %v", applyErr)
 				}
+			}
+			if restartNeeded {
+				// The config file on disk now points at the new server, but
+				// this process's in-memory api client still points at the
+				// old one -- exit non-zero so systemd/rc.d's restart-on-
+				// failure policy brings the agent back up reading the new
+				// FLEETVIEW_SERVER_URL (see handleNextJob's MIGRATE_SERVER
+				// case and the Restart= line in agent/packaging).
+				logger.Print("migrating to a new management server; restarting to reconnect")
+				os.Exit(1)
 			}
 		case <-settingsTicker.C:
 			remoteSettings, settingsErr := api.AgentSettings(ctx)
@@ -262,11 +272,17 @@ func scanAndReport(ctx context.Context, api *client.Client, manager packages.Man
 // was verified and reported successfully; the caller then applies it
 // (replacing/restarting the running agent) once this function has
 // returned, so the job-completion report is never at risk of being lost
-// to the process replacement it triggers.
-func handleNextJob(ctx context.Context, api *client.Client, manager packages.Manager, logger *log.Logger, dockerInventoryEnabled bool) (stagedUpgrade []byte, err error) {
+// to the process replacement it triggers. restartNeeded is the same idea
+// for a MIGRATE_SERVER job: the config file on disk has a new
+// FLEETVIEW_SERVER_URL by the time this returns, but the in-memory api
+// client still points at the old server, so the caller exits the process
+// (letting systemd/rc.d's restart-on-failure policy bring it back up
+// reading the new URL) only after this job's own completion report has
+// gone to the server it was actually received from.
+func handleNextJob(ctx context.Context, api *client.Client, manager packages.Manager, logger *log.Logger, dockerInventoryEnabled bool, configPath string) (stagedUpgrade []byte, restartNeeded bool, err error) {
 	job, err := api.NextJob(ctx)
 	if err != nil || job == nil {
-		return nil, err
+		return nil, false, err
 	}
 	logger.Printf("running job %s (%s)", job.ID, job.Type)
 	result := model.JobResult{Status: "succeeded", Output: "Job completed"}
@@ -462,16 +478,33 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 				logger.Printf("post-install scan failed: %v", scanErr)
 			}
 		}
+	case "MIGRATE_SERVER":
+		newURL, _ := job.Options["server_url"].(string)
+		newURL = strings.TrimRight(strings.TrimSpace(newURL), "/")
+		if !strings.HasPrefix(newURL, "http://") && !strings.HasPrefix(newURL, "https://") {
+			err = fmt.Errorf("server job did not include a valid target server URL")
+			break
+		}
+		if updateErr := config.UpdateServerURL(configPath, newURL); updateErr != nil {
+			err = fmt.Errorf("update server URL in config: %w", updateErr)
+			break
+		}
+		restartNeeded = true
+		result.Output = fmt.Sprintf("Re-pointed this agent at %s; restarting to reconnect", newURL)
 	default:
 		err = fmt.Errorf("unsupported job type %q", job.Type)
 	}
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()
+		restartNeeded = false
 	}
 	completeErr := api.CompleteJob(ctx, job.ID, result)
-	if completeErr != nil || err != nil || len(stagedUpgrade) == 0 {
-		return nil, completeErr
+	if completeErr != nil || err != nil {
+		return nil, false, completeErr
 	}
-	return stagedUpgrade, nil
+	if len(stagedUpgrade) == 0 && !restartNeeded {
+		return nil, false, nil
+	}
+	return stagedUpgrade, restartNeeded, nil
 }

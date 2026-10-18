@@ -9,6 +9,7 @@ mod error;
 mod integrations;
 mod live;
 mod manage_users;
+mod migration;
 mod models;
 mod reports;
 mod secrets_crypto;
@@ -65,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(live::router())
         .merge(reports::router())
         .merge(integrations::router())
+        .merge(migration::router())
         .with_state(state)
         .route_service("/", ServeFile::new(index_path))
         .nest_service("/static", ServeDir::new(&static_dir))

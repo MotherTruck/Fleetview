@@ -69,11 +69,15 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/install/agent-version", get(install_agent_version))
         .route("/install/linux.sh", get(install_linux_script))
         .route("/install/windows.ps1", get(install_windows_script))
+        .route("/install/opnsense.sh", get(install_opnsense_script))
         .route("/install/agent-source.tar.gz", get(install_agent_source))
         .route("/install/agent-source.sha256", get(install_agent_source_checksum))
         .route("/install/agent-linux-amd64", get(install_agent_binary_linux))
         .route("/install/agent-windows-amd64.exe", get(install_agent_binary_windows))
         .route("/install/agent-windows-installer.exe", get(install_agent_installer_windows))
+        .route("/install/agent-freebsd-amd64", get(install_agent_binary_freebsd))
+        .route("/install/agent-freebsd.rc", get(install_agent_freebsd_rc))
+        .route("/install/uninstall-agent-opnsense.sh", get(install_uninstall_opnsense_script))
 }
 
 // -- version-gate helpers --
@@ -965,7 +969,7 @@ async fn upgrade_agent(
     let Some(manifest) = published_agent_manifest() else {
         return Err(ApiError::conflict("This server has no published agent binaries built in"));
     };
-    if !matches!(device.platform.as_str(), "linux" | "windows") {
+    if !matches!(device.platform.as_str(), "linux" | "windows" | "freebsd") {
         return Err(ApiError::bad_request("Agent upgrade is unsupported on this device's platform"));
     }
     if !supports_agent_upgrade(&device) {
@@ -989,7 +993,11 @@ async fn upgrade_agent(
     if existing.is_some() {
         return Err(ApiError::conflict("An agent upgrade is already pending or running"));
     }
-    let platform_key = if device.platform == "windows" { "windows_amd64" } else { "linux_amd64" };
+    let platform_key = match device.platform.as_str() {
+        "windows" => "windows_amd64",
+        "freebsd" => "freebsd_amd64",
+        _ => "linux_amd64",
+    };
     let Some(asset) = manifest.get(platform_key) else {
         return Err(ApiError::conflict(format!("No published agent binary for {platform_key}")));
     };
@@ -1084,6 +1092,54 @@ async fn install_agent_binary_windows() -> Result<impl IntoResponse, ApiError> {
         [
             ("content-type", "application/octet-stream"),
             ("content-disposition", "attachment; filename=\"fleetview-agent.exe\""),
+        ],
+        data,
+    ))
+}
+
+async fn install_opnsense_script() -> Result<impl IntoResponse, ApiError> {
+    let data = read_install_file("opnsense.sh").await.map_err(|_| ApiError::not_found("OPNsense installer is not available"))?;
+    Ok((
+        [
+            ("content-type", "text/x-shellscript"),
+            ("content-disposition", "attachment; filename=\"install-fleetview-agent-opnsense.sh\""),
+        ],
+        data,
+    ))
+}
+
+async fn install_uninstall_opnsense_script() -> Result<impl IntoResponse, ApiError> {
+    let data = read_install_file("uninstall-agent-opnsense.sh")
+        .await
+        .map_err(|_| ApiError::not_found("OPNsense uninstaller is not available"))?;
+    Ok((
+        [
+            ("content-type", "text/x-shellscript"),
+            ("content-disposition", "attachment; filename=\"fleetview-agent-uninstall\""),
+        ],
+        data,
+    ))
+}
+
+async fn install_agent_binary_freebsd() -> Result<impl IntoResponse, ApiError> {
+    let data = tokio::fs::read(install_dir().join("agent-bin").join("freebsd-amd64").join("fleetview-agent"))
+        .await
+        .map_err(|_| ApiError::not_found("Published FreeBSD agent binary is not available"))?;
+    Ok((
+        [
+            ("content-type", "application/octet-stream"),
+            ("content-disposition", "attachment; filename=\"fleetview-agent\""),
+        ],
+        data,
+    ))
+}
+
+async fn install_agent_freebsd_rc() -> Result<impl IntoResponse, ApiError> {
+    let data = read_install_file("agent-freebsd.rc").await.map_err(|_| ApiError::not_found("Not available on this server"))?;
+    Ok((
+        [
+            ("content-type", "text/x-shellscript"),
+            ("content-disposition", "attachment; filename=\"fleetview-agent\""),
         ],
         data,
     ))

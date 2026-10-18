@@ -722,7 +722,7 @@ function renderAgentUpgradeStatus(device) {
   const manifest = state.publishedAgentVersion;
   section.hidden = state.user?.role !== "admin" || !manifest;
   if (!manifest || !device) { $("#upgradeAgentButton").hidden = true; $("#upgradeAgentStatus").textContent = ""; return; }
-  const supportedPlatform = device.platform === "linux" || device.platform === "windows";
+  const supportedPlatform = device.platform === "linux" || device.platform === "windows" || device.platform === "freebsd";
   const versionParts = String(device.agent_version || "").split(".").map(Number);
   const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
   const upToDate = device.agent_version === manifest.version;
@@ -742,7 +742,7 @@ function renderAgentVersionsTable() {
   note.textContent = manifest ? `Server has agent ${manifest.version} published.` : "This server has no published agent binaries built in.";
   const devices = [...state.devices].sort((a, b) => (a.display_name || a.hostname).localeCompare(b.display_name || b.hostname));
   table.innerHTML = devices.length ? devices.map((device) => {
-    const supportedPlatform = device.platform === "linux" || device.platform === "windows";
+    const supportedPlatform = device.platform === "linux" || device.platform === "windows" || device.platform === "freebsd";
     const versionParts = String(device.agent_version || "").split(".").map(Number);
     const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
     const upToDate = manifest && device.agent_version === manifest.version;
@@ -963,6 +963,7 @@ function tokenMetaText(fresh, status) {
 function renderInstallCommand() {
   const platform = $("#installPlatform").value;
   const windows = platform === "windows";
+  const opnsense = platform === "opnsense";
   $("#linuxInstallOutput").hidden = windows;
   $("#windowsInstallOutput").hidden = !windows;
 
@@ -1018,14 +1019,30 @@ function renderInstallCommand() {
   $("#copyInstallCommand").disabled = !usable;
   meta.hidden = !fresh;
   meta.textContent = tokenMetaText(fresh, status);
+  $("#installSourceBundle").hidden = opnsense;
   if (usable) {
-    const installerURL = `${serverURL}/install/linux.sh`;
-    $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
-      + (caFingerprint ? ` ${shellQuote(caFingerprint)}` : "");
-    $("#installCommandIntro").textContent = "Run this command in a terminal on the new Linux device:";
+    if (opnsense) {
+      // No local Go toolchain on a locked-down firewall appliance: this
+      // downloads the prebuilt freebsd-amd64 binary the server already
+      // cross-compiles (see server/Dockerfile), the same approach the
+      // Windows installer uses, rather than compiling from source like
+      // the Linux installer does.
+      const installerURL = `${serverURL}/install/opnsense.sh`;
+      $("#installCommand").textContent = `fetch -o /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(installerURL)} && sh /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`;
+      $("#installCommandIntro").textContent = "Run this command from the OPNsense console or an SSH session (as root):";
+      $("#installCommandNote").textContent = "Downloads the prebuilt FreeBSD agent binary, verifies its checksum, and starts it as an rc.d service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.";
+    } else {
+      const installerURL = `${serverURL}/install/linux.sh`;
+      $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
+        + (caFingerprint ? ` ${shellQuote(caFingerprint)}` : "");
+      $("#installCommandIntro").textContent = "Run this command in a terminal on the new Linux device:";
+      $("#installCommandNote").textContent = "The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.";
+    }
   } else {
     $("#installCommand").textContent = "";
-    $("#installCommandIntro").textContent = "Generate a one-time token to get the install command for a new Linux device.";
+    $("#installCommandIntro").textContent = opnsense
+      ? "Generate a one-time token to get the install command for a new OPNsense/FreeBSD device."
+      : "Generate a one-time token to get the install command for a new Linux device.";
   }
 }
 
@@ -1193,7 +1210,7 @@ function renderNetworkTopology() {
   </tr>`).join("") : '<tr><td colspan="5" class="empty">No DHCP leases synced yet.</td></tr>';
 }
 
-const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN" };
+const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN", MIGRATE_SERVER: "Server migration" };
 
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
@@ -2098,9 +2115,18 @@ function renderDeviceDetails() {
   // check (the inventory snapshot here can be briefly stale), so a session
   // that ended moments ago still shows a clear reason there -- but the tab
   // itself shouldn't invite a click when the last scan found no session.
+  // OPNsense/FreeBSD has no graphical session to capture at all -- the
+  // tab opens the device's own web GUI instead (see the deviceDialog
+  // click handler below), so it's offered whenever we have an IP to
+  // point it at, regardless of agent version or the (always-unavailable)
+  // remote_control capability.
+  const isOpnsense = device.platform === "freebsd";
   const screenVersionOk = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 23));
-  const screenSupported = screenVersionOk && inventory.remote_control?.available === true;
+  const screenSupported = isOpnsense
+    ? state.user?.role === "admin" && Array.isArray(inventory.ip_addresses) && inventory.ip_addresses.length > 0
+    : screenVersionOk && inventory.remote_control?.available === true;
   $("#screenTab").hidden = !screenSupported;
+  $("#screenTab").textContent = isOpnsense ? "Open web GUI ↗" : "Remote control ↗";
   const filesSupported = state.user?.role === "admin" && (versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 24));
   $("#filesTab").hidden = !filesSupported;
   if (!filesSupported && state.detailTab === "files") state.detailTab = "overview";
@@ -2845,16 +2871,25 @@ $("#deviceDialog").addEventListener("click", async (event) => {
   const tab = event.target.closest("[data-detail-tab]");
   if (!tab) return;
   if (tab.dataset.detailTab === "screen") {
-    // Remote control opens in its own window rather than the device
-    // detail dialog: a live screen view is naturally bigger and more
-    // useful full-size than crammed into a tab alongside everything else
-    // here. window.open must run synchronously in the click handler (no
+    // Remote control (or, for OPNsense/FreeBSD, the device's own web GUI)
+    // opens in its own window rather than the device detail dialog.
+    // window.open must run synchronously in the click handler (no
     // preceding await) or browsers treat it as an unrequested popup and
     // block it. A stable window name per device means clicking again
     // focuses the existing window instead of opening a second one.
     if (state.detailDevice) {
-      window.open(`/static/remote-control.html?device=${encodeURIComponent(state.detailDevice.id)}`,
-        `fleetview-remote-${state.detailDevice.id}`, "width=1280,height=860,noopener");
+      if (state.detailDevice.platform === "freebsd") {
+        const addresses = state.detailDevice.inventory?.ip_addresses;
+        const ip = Array.isArray(addresses) ? addresses[0] : null;
+        if (ip) {
+          window.open(`https://${ip}/`, `fleetview-gui-${state.detailDevice.id}`, "noopener");
+        } else {
+          showNotice("No IP address has been reported for this device yet.", true);
+        }
+      } else {
+        window.open(`/static/remote-control.html?device=${encodeURIComponent(state.detailDevice.id)}`,
+          `fleetview-remote-${state.detailDevice.id}`, "width=1280,height=860,noopener");
+      }
     }
     return;
   }
@@ -2945,6 +2980,46 @@ $("#fleetSettingsForm").addEventListener("submit", async (event) => {
     await refresh();
   } catch (error) { showNotice(error.message, true); }
 });
+$("#generateMigrationToken").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await api("/api/v1/admin/migration/generate-token", { method: "POST" });
+    $("#migrationTokenValue").textContent = result.token;
+    $("#migrationTokenOutput").hidden = false;
+    $("#migrationTokenMeta").hidden = false;
+    $("#migrationTokenMeta").textContent = `One-time token, expires ${fullDate(result.expires_at)}. Paste it into the old server's form, along with this server's URL.`;
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#migrationSendForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const targetURL = $("#migrationTargetURL").value.trim();
+  const token = $("#migrationToken").value.trim();
+  if (!confirm(`This replaces the entire database at ${targetURL} with this server's data, and re-points every enrolled agent there. This cannot be undone. Continue?`)) return;
+  const status = $("#migrationSendStatus");
+  status.textContent = "Migrating… this can take a while for a large fleet.";
+  const button = event.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const result = await api("/api/v1/admin/migration/send", {
+      method: "POST",
+      body: JSON.stringify({ target_url: targetURL, token }),
+    });
+    status.textContent = `Done. ${result.devices_queued} of ${result.devices_total} device(s) queued to reconnect to ${result.target_url}. They'll switch over at their next check-in.`;
+    $("#migrationToken").value = "";
+  } catch (error) {
+    status.textContent = "";
+    showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 applyAccent(currentAccentHex());
 setPage("dashboard");
 $("#installServerURL").value = window.location.origin;

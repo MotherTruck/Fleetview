@@ -71,6 +71,8 @@ func Uninstall(parent context.Context, manager string, name string) (string, int
 		executable, args = "apt-get", []string{"-y", "remove", "--", name}
 	case "pacman":
 		executable, args = "pacman", []string{"-R", "--noconfirm", "--", name}
+	case "pkg":
+		executable, args = "pkg", []string{"delete", "-y", "--", name}
 	case "winget":
 		executable, args = "winget", []string{"uninstall", "--id", name, "--exact", "--silent", "--disable-interactivity", "--accept-source-agreements"}
 	default:

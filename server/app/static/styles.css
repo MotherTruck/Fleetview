@@ -246,6 +246,9 @@ th.sortable.active { color: var(--accent); }
 .agent-settings-form > label { max-width: 420px; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .settings-grid > label { display: grid; gap: 7px; color: var(--soft); font-size: .82rem; }
+.migration-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 12px; }
+.migration-columns h3 { margin: 0 0 8px; font-size: .95rem; }
+.migration-columns .settings-grid { grid-template-columns: 1fr; margin-top: 10px; }
 .compose-creator { border-bottom: 1px solid var(--border); }
 .compose-form { display: grid; gap: 14px; margin-top: 14px; }
 .compose-form > label { display: grid; gap: 7px; color: var(--soft); font-size: .82rem; }
@@ -281,7 +284,7 @@ code { padding: 2px 5px; border-radius: 5px; color: var(--accent); background: v
   .detail-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .detail-overview { grid-template-columns: 1fr; }
   .current-metrics, .chart-grid-wrap { grid-template-columns: 1fr; }
-  .gpu-grid, .settings-grid, .add-device-layout { grid-template-columns: 1fr; }
+  .gpu-grid, .settings-grid, .add-device-layout, .migration-columns { grid-template-columns: 1fr; }
   .detail-toolbar { align-items: stretch; flex-direction: column; }
   .tabs { overflow-x: auto; }
   .tab { flex: 1; white-space: nowrap; }

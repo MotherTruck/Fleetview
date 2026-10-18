@@ -15,7 +15,7 @@ pub fn token_hash(token: &str) -> String {
     hex::encode(digest)
 }
 
-fn token_urlsafe(n_bytes: usize) -> String {
+pub fn token_urlsafe(n_bytes: usize) -> String {
     let mut bytes = vec![0u8; n_bytes];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
