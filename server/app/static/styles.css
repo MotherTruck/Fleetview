@@ -130,6 +130,13 @@ body.remote-control-page { min-height: 100vh; display: flex; flex-direction: col
 .pill.tag-pill { background: var(--raised); color: var(--soft); text-transform: none; }
 .tags-editor input { max-width: 480px; }
 .truncate { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.maintenance-window { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin: 0; }
+.maintenance-window legend { color: var(--soft); font-size: .82rem; padding: 0 6px; }
+.window-days { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 12px; }
+.window-days label { display: flex; align-items: center; gap: 5px; color: var(--soft); font-size: .82rem; }
+.window-days input { width: 16px; height: 16px; accent-color: var(--accent); }
+.window-hours { display: flex; gap: 14px; }
+.window-hours label { display: grid; gap: 7px; color: var(--soft); font-size: .82rem; max-width: 140px; }
 .inventory-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0; }
 .inventory-grid div { min-width: 0; padding: 11px; background: var(--raised); border-radius: 8px; }
 .inventory-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

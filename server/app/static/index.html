@@ -785,6 +785,23 @@ FLEETVIEW_PORT=8080</code></pre>
           <label>Automatic deployment interval (hours; 0 disables)
             <input id="patchInterval" type="number" min="0" max="8760" value="0" required>
           </label>
+          <fieldset class="maintenance-window">
+            <legend>Maintenance window (optional -- restricts when the interval above is allowed to actually fire, UTC)</legend>
+            <div class="window-days" id="patchWindowDays">
+              <label><input type="checkbox" value="0">Sun</label>
+              <label><input type="checkbox" value="1">Mon</label>
+              <label><input type="checkbox" value="2">Tue</label>
+              <label><input type="checkbox" value="3">Wed</label>
+              <label><input type="checkbox" value="4">Thu</label>
+              <label><input type="checkbox" value="5">Fri</label>
+              <label><input type="checkbox" value="6">Sat</label>
+            </div>
+            <div class="window-hours">
+              <label>From hour<input id="patchWindowStart" type="number" min="0" max="23" placeholder="e.g. 2"></label>
+              <label>To hour<input id="patchWindowEnd" type="number" max="23" min="0" placeholder="e.g. 4"></label>
+            </div>
+            <p class="form-note">Leave days unchecked for "every day"; leave hours blank for "any time". Both must be set together to restrict hours.</p>
+          </fieldset>
           <button type="submit">Save patch schedule</button>
         </form>
         <p id="patchScheduleInfo" class="form-note">Approved patches are queued at the next agent check-in after the interval.</p>

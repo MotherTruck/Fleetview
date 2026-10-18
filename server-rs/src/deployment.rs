@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -249,15 +249,29 @@ pub async fn queue_scheduled_patch(tx: &mut sqlx::PgConnection, device: &Device)
     if !supports_deployment(device) {
         return Ok(());
     }
-    let schedule = sqlx::query("SELECT interval_hours, next_run_at FROM patch_schedules WHERE device_id = $1")
-        .bind(&device.id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let schedule = sqlx::query(
+        "SELECT interval_hours, next_run_at, window_days, window_start_hour, window_end_hour \
+         FROM patch_schedules WHERE device_id = $1",
+    )
+    .bind(&device.id)
+    .fetch_optional(&mut *tx)
+    .await?;
     let Some(schedule) = schedule else { return Ok(()) };
     let interval_hours: i32 = schedule.get("interval_hours");
     let next_run_at: DateTime<Utc> = schedule.get("next_run_at");
+    let window_days: Option<String> = schedule.get("window_days");
+    let window_start_hour: Option<i16> = schedule.get("window_start_hour");
+    let window_end_hour: Option<i16> = schedule.get("window_end_hour");
     let now = Utc::now();
     if interval_hours == 0 || next_run_at > now {
+        return Ok(());
+    }
+    // Outside the configured maintenance window: leave next_run_at
+    // untouched (don't bump it to now + interval) so this is re-checked
+    // on every subsequent agent poll rather than skipped until the next
+    // whole interval -- the deploy fires at the first poll once the
+    // window opens, not up to a full interval late.
+    if !within_maintenance_window(window_days.as_deref(), window_start_hour, window_end_hour, now) {
         return Ok(());
     }
     let claimed = sqlx::query(
@@ -466,20 +480,32 @@ async fn deploy_approved(
 struct ScheduleView {
     interval_hours: i32,
     next_run_at: Option<DateTime<Utc>>,
+    window_days: Option<String>,
+    window_start_hour: Option<i16>,
+    window_end_hour: Option<i16>,
 }
 
 async fn patch_schedule_view(state: &AppState, id: &str) -> Result<ScheduleView, ApiError> {
-    let row = sqlx::query("SELECT interval_hours, next_run_at FROM patch_schedules WHERE device_id = $1")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await?;
+    let row = sqlx::query(
+        "SELECT interval_hours, next_run_at, window_days, window_start_hour, window_end_hour \
+         FROM patch_schedules WHERE device_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
     Ok(match row {
         Some(row) => {
             let hours: i32 = row.get("interval_hours");
             let next: DateTime<Utc> = row.get("next_run_at");
-            ScheduleView { interval_hours: hours, next_run_at: if hours != 0 { Some(next) } else { None } }
+            ScheduleView {
+                interval_hours: hours,
+                next_run_at: if hours != 0 { Some(next) } else { None },
+                window_days: row.get("window_days"),
+                window_start_hour: row.get("window_start_hour"),
+                window_end_hour: row.get("window_end_hour"),
+            }
         }
-        None => ScheduleView { interval_hours: 0, next_run_at: None },
+        None => ScheduleView { interval_hours: 0, next_run_at: None, window_days: None, window_start_hour: None, window_end_hour: None },
     })
 }
 
@@ -497,6 +523,33 @@ async fn get_patch_schedule(
 #[derive(Deserialize)]
 struct ScheduleInput {
     interval_hours: i32,
+    // Comma-separated day-of-week numbers, 0 = Sunday .. 6 = Saturday, UTC
+    // (matching chrono's Weekday::num_days_from_sunday); None/empty means
+    // every day.
+    #[serde(default)]
+    window_days: Option<String>,
+    #[serde(default)]
+    window_start_hour: Option<i16>,
+    #[serde(default)]
+    window_end_hour: Option<i16>,
+}
+
+fn validate_window(payload: &ScheduleInput) -> Result<Option<String>, ApiError> {
+    let days = payload.window_days.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(days) = days {
+        for part in days.split(',') {
+            let day: i32 = part.trim().parse().map_err(|_| ApiError::bad_request("window_days must be comma-separated numbers 0-6"))?;
+            if !(0..=6).contains(&day) {
+                return Err(ApiError::bad_request("window_days must be comma-separated numbers 0-6 (0 = Sunday)"));
+            }
+        }
+    }
+    for hour in [payload.window_start_hour, payload.window_end_hour].into_iter().flatten() {
+        if !(0..=23).contains(&hour) {
+            return Err(ApiError::bad_request("window hours must be between 0 and 23"));
+        }
+    }
+    Ok(days.map(str::to_string))
 }
 
 async fn set_patch_schedule(
@@ -508,6 +561,7 @@ async fn set_patch_schedule(
     if !(0..=8760).contains(&payload.interval_hours) {
         return Err(ApiError::bad_request("interval_hours must be between 0 and 8760"));
     }
+    let window_days = validate_window(&payload)?;
     let Some(device) = fetch_device(&state, &id).await? else {
         return Err(ApiError::not_found("Device not found"));
     };
@@ -515,15 +569,46 @@ async fn set_patch_schedule(
         return Err(ApiError::bad_request("Patch scheduling is unsupported on this device"));
     }
     sqlx::query(
-        "INSERT INTO patch_schedules (device_id, interval_hours, next_run_at) VALUES ($1, $2, $3) \
-         ON CONFLICT (device_id) DO UPDATE SET interval_hours = $2, next_run_at = $3",
+        "INSERT INTO patch_schedules (device_id, interval_hours, next_run_at, window_days, window_start_hour, window_end_hour) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (device_id) DO UPDATE SET interval_hours = $2, next_run_at = $3, window_days = $4, window_start_hour = $5, window_end_hour = $6",
     )
     .bind(&id)
     .bind(payload.interval_hours)
     .bind(Utc::now() + Duration::hours(payload.interval_hours as i64))
+    .bind(&window_days)
+    .bind(payload.window_start_hour)
+    .bind(payload.window_end_hour)
     .execute(&state.db)
     .await?;
     Ok(Json(patch_schedule_view(&state, &id).await?))
+}
+
+/// True when `now` falls inside the maintenance window described by
+/// `window_days`/`window_start_hour`/`window_end_hour` -- all of them
+/// None means "no window configured," always true (the pre-existing,
+/// interval-only behavior). A start hour greater than the end hour is a
+/// window that crosses midnight (e.g. 23 -> 2), handled by OR-ing the two
+/// half-open ranges instead of one.
+fn within_maintenance_window(window_days: Option<&str>, start_hour: Option<i16>, end_hour: Option<i16>, now: DateTime<Utc>) -> bool {
+    if let Some(days) = window_days {
+        let today = now.weekday().num_days_from_sunday() as i32;
+        let allowed = days.split(',').filter_map(|part| part.trim().parse::<i32>().ok()).any(|day| day == today);
+        if !allowed {
+            return false;
+        }
+    }
+    if let (Some(start), Some(end)) = (start_hour, end_hour) {
+        let hour = now.hour() as i16;
+        if start <= end {
+            if hour < start || hour >= end {
+                return false;
+            }
+        } else if hour >= end && hour < start {
+            return false;
+        }
+    }
+    true
 }
 
 // -- custom package bundles --
@@ -1231,5 +1316,50 @@ mod patch_approval_tests {
     fn patch_key_falls_back_to_package_name_when_it_is_already_safe() {
         let item = json!({ "package": "openssl", "available_version": "3.0.1" });
         assert_eq!(patch_key(&item), Some(("openssl".to_string(), "3.0.1".to_string())));
+    }
+}
+
+#[cfg(test)]
+mod maintenance_window_tests {
+    use super::*;
+
+    fn at(iso: &str) -> DateTime<Utc> {
+        iso.parse().unwrap()
+    }
+
+    #[test]
+    fn no_window_configured_is_always_within_window() {
+        assert!(within_maintenance_window(None, None, None, at("2026-01-01T12:00:00Z")));
+    }
+
+    #[test]
+    fn day_restriction_only() {
+        // 2026-01-04 is a Sunday.
+        assert!(within_maintenance_window(Some("0"), None, None, at("2026-01-04T12:00:00Z")));
+        assert!(!within_maintenance_window(Some("0"), None, None, at("2026-01-05T12:00:00Z")));
+    }
+
+    #[test]
+    fn simple_hour_range() {
+        assert!(within_maintenance_window(None, Some(2), Some(4), at("2026-01-01T03:00:00Z")));
+        assert!(!within_maintenance_window(None, Some(2), Some(4), at("2026-01-01T05:00:00Z")));
+        // Half-open: the end hour itself is excluded.
+        assert!(!within_maintenance_window(None, Some(2), Some(4), at("2026-01-01T04:00:00Z")));
+    }
+
+    #[test]
+    fn midnight_crossing_hour_range() {
+        // 23:00 -> 02:00: inside at 23:30 and 01:00, outside at noon.
+        assert!(within_maintenance_window(None, Some(23), Some(2), at("2026-01-01T23:30:00Z")));
+        assert!(within_maintenance_window(None, Some(23), Some(2), at("2026-01-01T01:00:00Z")));
+        assert!(!within_maintenance_window(None, Some(23), Some(2), at("2026-01-01T12:00:00Z")));
+    }
+
+    #[test]
+    fn day_and_hour_combined() {
+        // Only Saturdays (6) 02:00-04:00; 2026-01-03 is a Saturday.
+        assert!(within_maintenance_window(Some("6"), Some(2), Some(4), at("2026-01-03T03:00:00Z")));
+        assert!(!within_maintenance_window(Some("6"), Some(2), Some(4), at("2026-01-03T12:00:00Z")));
+        assert!(!within_maintenance_window(Some("6"), Some(2), Some(4), at("2026-01-04T03:00:00Z")));
     }
 }

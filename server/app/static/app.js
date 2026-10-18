@@ -2386,7 +2386,14 @@ function renderDeviceDetails() {
     }).join("") : '<tr><td colspan="6" class="empty">No needed patches match this view.</td></tr>';
     const schedule = state.patchSchedules[device.id];
     $("#patchInterval").value = schedule?.interval_hours ?? 0;
-    $("#patchScheduleInfo").textContent = schedule?.next_run_at ? `Next due: ${fullDate(schedule.next_run_at)}. Only currently approved patches will be queued.` : "Schedule disabled. Approved patches remain ready for manual deployment.";
+    const scheduledDays = new Set((schedule?.window_days || "").split(",").map((d) => d.trim()).filter(Boolean));
+    $("#patchWindowDays").querySelectorAll("input[type=checkbox]").forEach((box) => { box.checked = scheduledDays.has(box.value); });
+    $("#patchWindowStart").value = schedule?.window_start_hour ?? "";
+    $("#patchWindowEnd").value = schedule?.window_end_hour ?? "";
+    const windowNote = schedule?.window_days || (schedule?.window_start_hour != null && schedule?.window_end_hour != null)
+      ? ` Restricted to a maintenance window (${scheduledDays.size ? [...scheduledDays].map((d) => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]).join("/") : "every day"}${schedule?.window_start_hour != null ? `, ${schedule.window_start_hour}:00-${schedule.window_end_hour}:00 UTC` : ""}).`
+      : "";
+    $("#patchScheduleInfo").textContent = schedule?.next_run_at ? `Next due: ${fullDate(schedule.next_run_at)}. Only currently approved patches will be queued.${windowNote}` : "Schedule disabled. Approved patches remain ready for manual deployment.";
     $("#deployApprovedPatches").disabled = state.user?.role === "viewer" || !approvals.some(item => item.approved && item.supported);
     $("#approveAllPatches").disabled = state.user?.role === "viewer" || !approvals.some(item => !item.approved && item.supported);
     $("#patchScheduleForm").querySelector("button").disabled = state.user?.role === "viewer";
@@ -2733,9 +2740,18 @@ $("#patchScheduleForm").addEventListener("submit", async event => {
   event.preventDefault();
   const device = state.detailDevice;
   if (!device) return;
+  const checkedDays = [...$("#patchWindowDays").querySelectorAll("input:checked")].map((box) => box.value);
+  const startRaw = $("#patchWindowStart").value;
+  const endRaw = $("#patchWindowEnd").value;
   try {
     state.patchSchedules[device.id] = await api(`/api/v1/admin/devices/${device.id}/patch-schedule`, {
-      method: "PUT", body: JSON.stringify({ interval_hours: Number($("#patchInterval").value) }),
+      method: "PUT",
+      body: JSON.stringify({
+        interval_hours: Number($("#patchInterval").value),
+        window_days: checkedDays.length ? checkedDays.join(",") : null,
+        window_start_hour: startRaw === "" ? null : Number(startRaw),
+        window_end_hour: endRaw === "" ? null : Number(endRaw),
+      }),
     });
     renderDeviceDetails();
     showNotice("Patch schedule saved. Currently approved versions will deploy when due.");
