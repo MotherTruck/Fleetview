@@ -23,7 +23,7 @@
 //! empty. Both ends need `pg_dump`/`pg_restore` on PATH (see
 //! server/Dockerfile's postgresql-client install).
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
@@ -46,7 +46,19 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/admin/migration/generate-token", post(generate_token))
         .route("/api/v1/admin/migration/send", post(send))
-        .route("/api/v1/admin/migration/receive", post(receive))
+        .route(
+            "/api/v1/admin/migration/receive",
+            // A whole-database pg_dump can genuinely run well past
+            // main.rs's tightened global body limit on a fleet with years
+            // of metrics history. Generous rather than disabled outright:
+            // receive's own token check happens inside the handler, after
+            // axum has already buffered the body into the `Bytes`
+            // extractor, so an unbounded limit here would let an
+            // unauthenticated request exhaust memory before that check
+            // ever runs. 4 GiB comfortably covers any realistic dump
+            // while still bounding the worst case.
+            post(receive).route_layer(DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)),
+        )
 }
 
 const TOKEN_TTL_MINUTES: i64 = 30;

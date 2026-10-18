@@ -81,11 +81,15 @@ async fn main() -> anyhow::Result<()> {
         // axum's own default is 2MB, silently applied to every route since
         // nothing here overrode it -- fine for most JSON bodies, but a
         // vulnerability report from a device with a lot of listening
-        // services/CVEs can exceed that, and a real custom installer
-        // upload (upload_bundle, deployment.rs) almost always does. 512MB
-        // comfortably covers both without opening this up to an
-        // unbounded request.
-        .layer(DefaultBodyLimit::max(512 * 1024 * 1024));
+        // services/CVEs can exceed that. 32MB comfortably covers that and
+        // upload_bundle's own already-enforced 16MB total (deployment.rs's
+        // MAX_FILE/MAX_TOTAL), while keeping the window a request can make
+        // an unauthenticated or lightly-authenticated route buffer well
+        // below the 512MB this used to allow everywhere. migration.rs's
+        // receive route (the one legitimately-huge body -- a whole-
+        // database pg_dump) sets its own much larger limit directly on
+        // that route, overriding this default.
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024));
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
