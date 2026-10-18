@@ -209,6 +209,33 @@
         </section>
 
         <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">SCRIPT LIBRARY</p><h2>Saved scripts</h2></div></div>
+          <div class="add-device-layout">
+            <form id="scriptForm" class="add-device-form">
+              <input type="hidden" id="scriptId">
+              <label>Name<input id="scriptName" type="text" required maxlength="255" autocomplete="off" placeholder="e.g. Clear apt cache"></label>
+              <label>Description<input id="scriptDescription" type="text" maxlength="500" autocomplete="off" placeholder="Optional"></label>
+              <label>Platform<select id="scriptPlatform"><option value="any">Any</option><option value="linux">Linux</option><option value="windows">Windows</option><option value="freebsd">FreeBSD/OPNsense</option></select></label>
+              <label>Script body (runs via Bash/PowerShell depending on platform)
+                <textarea id="scriptBody" required maxlength="4096" rows="4" placeholder="e.g. apt-get clean"></textarea>
+              </label>
+              <div class="settings-actions">
+                <button type="submit" id="scriptSubmit">Save script</button>
+                <button type="button" id="scriptCancelEdit" class="secondary" hidden>Cancel edit</button>
+              </div>
+            </form>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Platform</th><th></th></tr></thead><tbody id="scriptRows"><tr><td colspan="3" class="empty">No saved scripts yet.</td></tr></tbody></table></div>
+          </div>
+          <div class="panel-body">
+            <label>Run saved script
+              <select id="runScriptSelect"><option value="">Choose a script…</option></select>
+            </label>
+            <p class="form-note">Runs on every selected device below (see "Select devices to deploy to"), via the same RUN_COMMAND path as "Run a command" -- requires a native agent on 0.16.0 or later.</p>
+            <div class="settings-actions"><button type="button" id="runScriptSubmit" disabled>Run on selected devices</button></div>
+          </div>
+        </section>
+
+        <section class="panel" data-admin-only>
           <div class="panel-heading"><div><p class="eyebrow">DIAGNOSTICS</p><h2>Run a command</h2></div></div>
           <form id="runCommandForm" class="agent-settings-form">
             <label>Command (runs with the agent service's privileges)
@@ -514,6 +541,45 @@
             <pre><code>FLEETVIEW_BIND_ADDRESS=127.0.0.1   # or a LAN/VM IP, or 0.0.0.0
 FLEETVIEW_PORT=8080</code></pre>
             <p class="form-note">After changing either value, run <code>docker compose up -d</code> on the Docker host to apply it. To check what's actually published right now (and diagnose access problems from another machine), run <code>./scripts/check-access.sh</code> there.</p>
+          </div>
+        </section>
+
+        <section class="panel" data-admin-only>
+          <div class="panel-heading"><div><p class="eyebrow">NOTIFICATIONS</p><h2>Alerting</h2></div></div>
+          <div class="panel-body">
+            <h3>Notification channels</h3>
+            <p class="form-note">Webhook URLs to notify when an alert fires or resolves. "Slack-compatible" posts a <code>{"text": "..."}</code> body, which Slack, Discord (incoming webhook), and Mattermost all accept; "Generic JSON" posts <code>{"title", "message", "source"}</code> for anything else (e.g. a custom receiver, n8n, PagerDuty's Events API with a small relay).</p>
+            <form id="channelForm" class="settings-grid">
+              <label>Name<input id="channelName" type="text" maxlength="255" required></label>
+              <label>Webhook URL<input id="channelURL" type="url" placeholder="https://hooks.slack.com/services/..." required></label>
+              <label>Format
+                <select id="channelFormat"><option value="generic">Generic JSON</option><option value="slack">Slack-compatible</option></select>
+              </label>
+              <button type="submit">Add channel</button>
+            </form>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>URL</th><th>Format</th><th>Enabled</th><th>Action</th></tr></thead><tbody id="channelRows"></tbody></table></div>
+          </div>
+          <div class="panel-body">
+            <h3>Alert rules</h3>
+            <p class="form-note">Every enabled channel above is notified when a rule starts firing, and again when it resolves (except "Job failed," a one-time event with nothing to resolve). Leave "Only devices tagged" blank to cover the whole fleet.</p>
+            <form id="alertRuleForm" class="settings-grid">
+              <label>Name<input id="ruleName" type="text" maxlength="255" placeholder="e.g. Root disk almost full" required></label>
+              <label>Condition
+                <select id="ruleKind">
+                  <option value="device_offline">Device offline</option>
+                  <option value="resource_threshold">Resource usage above threshold</option>
+                  <option value="vulnerability_found">Critical/High vulnerability found</option>
+                  <option value="job_failed">Job failed</option>
+                </select>
+              </label>
+              <label id="ruleMetricField" hidden>Metric
+                <select id="ruleMetric"><option value="cpu">CPU</option><option value="memory">Memory</option><option value="disk">Root disk</option></select>
+              </label>
+              <label id="ruleThresholdField" hidden>Threshold<input id="ruleThreshold" type="number" min="1" step="1"></label>
+              <label>Only devices tagged (optional)<input id="ruleTagFilter" type="text" placeholder="e.g. production"></label>
+              <button type="submit">Add rule</button>
+            </form>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Condition</th><th>Scope</th><th>Enabled</th><th>Action</th></tr></thead><tbody id="alertRuleRows"></tbody></table></div>
           </div>
         </section>
 

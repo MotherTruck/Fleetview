@@ -832,6 +832,19 @@ async fn complete_job(
             .await?;
     }
     tx.commit().await?;
+    if payload.status == "failed" {
+        let db = state.db.clone();
+        let error = payload.error.clone();
+        let job_type_owned = job_type.clone();
+        let job_id_owned = job_id.clone();
+        // Fire-and-forget: webhook delivery (possibly to a slow or
+        // unreachable endpoint) must never add latency to the agent's own
+        // job-completion request.
+        tokio::spawn(async move {
+            let error_ref = if error.is_empty() { None } else { Some(error.as_str()) };
+            crate::alerting::notify_job_failed(&db, &device, &job_type_owned, &job_id_owned, error_ref).await;
+        });
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

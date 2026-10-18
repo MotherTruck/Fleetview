@@ -1,4 +1,5 @@
 mod accounts;
+mod alerting;
 mod auth;
 mod connectors;
 mod db;
@@ -12,6 +13,7 @@ mod manage_users;
 mod migration;
 mod models;
 mod reports;
+mod scripts;
 mod secrets_crypto;
 mod security;
 
@@ -52,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect().await?;
     tokio::spawn(integrations::periodic_sync_loop(pool.clone()));
+    tokio::spawn(alerting::evaluate_loop(pool.clone()));
     let state = Arc::new(AppState { db: pool, hub: live::LiveHub::new() });
 
     let static_dir = std::env::var("FLEETVIEW_STATIC_DIR").unwrap_or_else(|_| "static".to_string());
@@ -60,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .merge(accounts::router())
+        .merge(alerting::router())
         .merge(enrollment::router())
         .merge(devices::router())
         .merge(deployment::router())
@@ -67,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(reports::router())
         .merge(integrations::router())
         .merge(migration::router())
+        .merge(scripts::router())
         .with_state(state)
         .route_service("/", ServeFile::new(index_path))
         .nest_service("/static", ServeDir::new(&static_dir))

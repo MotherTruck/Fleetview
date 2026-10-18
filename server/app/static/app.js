@@ -17,6 +17,10 @@ const state = {
   deploySelected: new Set(),
   inventorySelected: new Set(),
   inventoryTagFilter: "",
+  notificationChannels: [],
+  alertRules: [],
+  scripts: [],
+  editingScriptId: null,
   reportRows: [],
   reportFields: [],
   reportHistory: [],
@@ -1308,6 +1312,8 @@ function updateDeploySubmitState() {
   if (runCommandSubmit) runCommandSubmit.disabled = count === 0 || state.user?.role !== "admin";
   const netDiagSubmit = $("#netDiagSubmit");
   if (netDiagSubmit) netDiagSubmit.disabled = count === 0 || state.user?.role === "viewer";
+  const runScriptSubmit = $("#runScriptSubmit");
+  if (runScriptSubmit) runScriptSubmit.disabled = count === 0 || state.user?.role !== "admin" || !$("#runScriptSelect").value;
 }
 
 function renderDeployJobs() {
@@ -1328,6 +1334,44 @@ function renderDeploy() {
   renderDeployJobs();
   renderPackageCatalog();
   renderCustomPackages();
+  if (state.user?.role === "admin") renderScripts();
+}
+
+function renderScripts() {
+  $("#scriptRows").innerHTML = state.scripts.length ? state.scripts.map((script) => `
+    <tr>
+      <td class="package-name">${escapeHtml(script.name)}${script.description ? `<div class="device-subtitle">${escapeHtml(script.description)}</div>` : ""}</td>
+      <td>${escapeHtml(script.platform)}</td>
+      <td class="device-actions">
+        <button type="button" class="secondary" data-script-edit="${escapeHtml(script.id)}">Edit</button>
+        <button type="button" class="danger" data-script-delete="${escapeHtml(script.id)}">Delete</button>
+      </td>
+    </tr>`).join("") : '<tr><td colspan="3" class="empty">No saved scripts yet.</td></tr>';
+  const select = $("#runScriptSelect");
+  const previous = select.value;
+  select.innerHTML = '<option value="">Choose a script…</option>'
+    + state.scripts.map((script) => `<option value="${escapeHtml(script.id)}">${escapeHtml(script.name)}${script.platform !== "any" ? ` (${escapeHtml(script.platform)})` : ""}</option>`).join("");
+  if (state.scripts.some((script) => script.id === previous)) select.value = previous;
+  updateDeploySubmitState();
+}
+
+function resetScriptForm() {
+  state.editingScriptId = null;
+  $("#scriptForm").reset();
+  $("#scriptId").value = "";
+  $("#scriptSubmit").textContent = "Save script";
+  $("#scriptCancelEdit").hidden = true;
+}
+
+function editScript(script) {
+  state.editingScriptId = script.id;
+  $("#scriptId").value = script.id;
+  $("#scriptName").value = script.name;
+  $("#scriptDescription").value = script.description || "";
+  $("#scriptPlatform").value = script.platform;
+  $("#scriptBody").value = script.body;
+  $("#scriptSubmit").textContent = "Update script";
+  $("#scriptCancelEdit").hidden = false;
 }
 
 function renderCustomPackages() {
@@ -1472,6 +1516,51 @@ function renderAdmin() {
   const inventoryInput = $("#defaultInventoryInterval");
   if (document.activeElement !== metricsInput) metricsInput.value = state.fleetSettings.default_metrics_interval_seconds;
   if (document.activeElement !== inventoryInput) inventoryInput.value = state.fleetSettings.default_inventory_interval_seconds;
+  if (state.user?.role === "admin") { renderChannels(); renderAlertRules(); }
+}
+
+const ruleKindLabels = {
+  device_offline: "Device offline",
+  resource_threshold: "Resource usage",
+  vulnerability_found: "Critical/High vulnerability",
+  job_failed: "Job failed",
+};
+
+function ruleConditionText(rule) {
+  if (rule.kind === "device_offline") return `Offline > ${rule.threshold_value} min`;
+  if (rule.kind === "resource_threshold") return `${rule.metric} > ${rule.threshold_value}%`;
+  return ruleKindLabels[rule.kind] || rule.kind;
+}
+
+function renderChannels() {
+  const tbody = $("#channelRows");
+  tbody.innerHTML = state.notificationChannels.length ? state.notificationChannels.map((channel) => `
+    <tr>
+      <td>${escapeHtml(channel.name)}</td>
+      <td class="truncate" title="${escapeHtml(channel.url)}">${escapeHtml(channel.url)}</td>
+      <td>${channel.format === "slack" ? "Slack-compatible" : "Generic JSON"}</td>
+      <td><span class="pill ${channel.enabled ? "succeeded" : "unknown"}">${channel.enabled ? "Yes" : "No"}</span></td>
+      <td class="device-actions">
+        <button type="button" class="secondary" data-channel-test="${escapeHtml(channel.id)}">Test</button>
+        <button type="button" class="secondary" data-channel-toggle="${escapeHtml(channel.id)}">${channel.enabled ? "Disable" : "Enable"}</button>
+        <button type="button" class="danger" data-channel-delete="${escapeHtml(channel.id)}">Delete</button>
+      </td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">No notification channels configured yet.</td></tr>';
+}
+
+function renderAlertRules() {
+  const tbody = $("#alertRuleRows");
+  tbody.innerHTML = state.alertRules.length ? state.alertRules.map((rule) => `
+    <tr>
+      <td>${escapeHtml(rule.name)}</td>
+      <td>${escapeHtml(ruleConditionText(rule))}</td>
+      <td>${rule.tag_filter ? `<span class="pill tag-pill">${escapeHtml(rule.tag_filter)}</span>` : "Whole fleet"}</td>
+      <td><span class="pill ${rule.enabled ? "succeeded" : "unknown"}">${rule.enabled ? "Yes" : "No"}</span></td>
+      <td class="device-actions">
+        <button type="button" class="secondary" data-rule-toggle="${escapeHtml(rule.id)}">${rule.enabled ? "Disable" : "Enable"}</button>
+        <button type="button" class="danger" data-rule-delete="${escapeHtml(rule.id)}">Delete</button>
+      </td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">No alert rules configured yet.</td></tr>';
 }
 
 function renderComplianceTrends() {
@@ -2447,9 +2536,12 @@ async function refresh() {
       state.user.role === "admin" ? api("/api/v1/admin/custom-packages") : Promise.resolve([]),
       state.user.role === "admin" ? api("/api/v1/admin/agent-version").catch(() => null) : Promise.resolve(null),
       api("/api/v1/admin/integrations").catch(() => []),
+      state.user.role === "admin" ? api("/api/v1/admin/notification-channels").catch(() => []) : Promise.resolve([]),
+      state.user.role === "admin" ? api("/api/v1/admin/alert-rules").catch(() => []) : Promise.resolve([]),
+      state.user.role === "admin" ? api("/api/v1/admin/scripts").catch(() => []) : Promise.resolve([]),
     ]);
     if (!state.user || generation !== state.authGeneration) return;
-    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion, state.integrations] = results;
+    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion, state.integrations, state.notificationChannels, state.alertRules, state.scripts] = results;
     showNotice(state.devices.length ? "Fleet data is current." : "Server is ready. Enroll the first agent to populate the fleet.");
     $("#refreshState").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     render();
@@ -2744,6 +2836,64 @@ $("#deployForm").addEventListener("submit", async (event) => {
   } finally {
     updateDeploySubmitState();
   }
+});
+$("#scriptForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = {
+    name: $("#scriptName").value.trim(),
+    description: $("#scriptDescription").value.trim(),
+    platform: $("#scriptPlatform").value,
+    body: $("#scriptBody").value,
+  };
+  try {
+    if (state.editingScriptId) {
+      await api(`/api/v1/admin/scripts/${state.editingScriptId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await api("/api/v1/admin/scripts", { method: "POST", body: JSON.stringify(payload) });
+    }
+    showNotice("Script saved.");
+    resetScriptForm();
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+});
+$("#scriptCancelEdit").addEventListener("click", resetScriptForm);
+$("#scriptRows").addEventListener("click", async (event) => {
+  const editButton = event.target.closest("[data-script-edit]");
+  const deleteButton = event.target.closest("[data-script-delete]");
+  if (editButton) {
+    const script = state.scripts.find((item) => item.id === editButton.dataset.scriptEdit);
+    if (script) editScript(script);
+  }
+  if (deleteButton) {
+    if (!confirm("Delete this saved script?")) return;
+    try {
+      await api(`/api/v1/admin/scripts/${deleteButton.dataset.scriptDelete}`, { method: "DELETE" });
+      if (state.editingScriptId === deleteButton.dataset.scriptDelete) resetScriptForm();
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+  }
+});
+$("#runScriptSelect").addEventListener("change", updateDeploySubmitState);
+$("#runScriptSubmit").addEventListener("click", async () => {
+  const scriptId = $("#runScriptSelect").value;
+  const script = state.scripts.find((item) => item.id === scriptId);
+  const deviceIds = [...state.deploySelected];
+  if (!script || deviceIds.length === 0) return;
+  const names = deviceIds.map((id) => {
+    const device = state.devices.find((item) => item.id === id);
+    return device ? (device.display_name || device.hostname) : id;
+  });
+  if (!confirm(`Run "${script.name}" on ${deviceIds.length} device${deviceIds.length === 1 ? "" : "s"}?\n\n${names.join(", ")}`)) return;
+  const button = $("#runScriptSubmit");
+  button.disabled = true;
+  try {
+    const outcomes = await Promise.allSettled(deviceIds.map((id) => api(`/api/v1/admin/devices/${id}/scripts/${scriptId}/run`, { method: "POST" })));
+    const failed = outcomes.filter((result) => result.status === "rejected");
+    showNotice(`Queued on ${deviceIds.length - failed.length} device(s).${failed.length ? ` ${failed.length} failed: ${failed[0].reason.message}` : ""}`, Boolean(failed.length));
+    setPage("patching");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+  finally { updateDeploySubmitState(); }
 });
 $("#runCommandForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -3127,6 +3277,102 @@ $("#fleetSettingsForm").addEventListener("submit", async (event) => {
     await refresh();
   } catch (error) { showNotice(error.message, true); }
 });
+$("#channelForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/v1/admin/notification-channels", {
+      method: "POST",
+      body: JSON.stringify({ name: $("#channelName").value.trim(), url: $("#channelURL").value.trim(), format: $("#channelFormat").value }),
+    });
+    event.target.reset();
+    showNotice("Notification channel added.");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+});
+$("#channelRows").addEventListener("click", async (event) => {
+  const testButton = event.target.closest("[data-channel-test]");
+  const toggleButton = event.target.closest("[data-channel-toggle]");
+  const deleteButton = event.target.closest("[data-channel-delete]");
+  if (testButton) {
+    testButton.disabled = true;
+    try {
+      await api(`/api/v1/admin/notification-channels/${testButton.dataset.channelTest}/test`, { method: "POST" });
+      showNotice("Test notification sent.");
+    } catch (error) { showNotice(error.message, true); }
+    finally { testButton.disabled = false; }
+  }
+  if (toggleButton) {
+    const channel = state.notificationChannels.find((item) => item.id === toggleButton.dataset.channelToggle);
+    if (!channel) return;
+    try {
+      await api(`/api/v1/admin/notification-channels/${channel.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: channel.name, url: channel.url, format: channel.format, enabled: !channel.enabled }),
+      });
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+  }
+  if (deleteButton) {
+    if (!confirm("Delete this notification channel?")) return;
+    try {
+      await api(`/api/v1/admin/notification-channels/${deleteButton.dataset.channelDelete}`, { method: "DELETE" });
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+  }
+});
+
+$("#ruleKind").addEventListener("change", () => {
+  const kind = $("#ruleKind").value;
+  $("#ruleMetricField").hidden = kind !== "resource_threshold";
+  $("#ruleThresholdField").hidden = !["resource_threshold", "device_offline"].includes(kind);
+  $("#ruleThreshold").placeholder = kind === "device_offline" ? "minutes" : "percent";
+});
+$("#alertRuleForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const kind = $("#ruleKind").value;
+  const body = {
+    name: $("#ruleName").value.trim(),
+    kind,
+    tag_filter: $("#ruleTagFilter").value.trim() || null,
+  };
+  if (kind === "resource_threshold") {
+    body.metric = $("#ruleMetric").value;
+    body.threshold_value = Number($("#ruleThreshold").value);
+  } else if (kind === "device_offline") {
+    body.threshold_value = Number($("#ruleThreshold").value);
+  }
+  try {
+    await api("/api/v1/admin/alert-rules", { method: "POST", body: JSON.stringify(body) });
+    event.target.reset();
+    $("#ruleMetricField").hidden = true;
+    $("#ruleThresholdField").hidden = true;
+    showNotice("Alert rule added.");
+    await refresh();
+  } catch (error) { showNotice(error.message, true); }
+});
+$("#alertRuleRows").addEventListener("click", async (event) => {
+  const toggleButton = event.target.closest("[data-rule-toggle]");
+  const deleteButton = event.target.closest("[data-rule-delete]");
+  if (toggleButton) {
+    const rule = state.alertRules.find((item) => item.id === toggleButton.dataset.ruleToggle);
+    if (!rule) return;
+    try {
+      await api(`/api/v1/admin/alert-rules/${rule.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: rule.name, kind: rule.kind, metric: rule.metric, threshold_value: rule.threshold_value, tag_filter: rule.tag_filter, enabled: !rule.enabled }),
+      });
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+  }
+  if (deleteButton) {
+    if (!confirm("Delete this alert rule?")) return;
+    try {
+      await api(`/api/v1/admin/alert-rules/${deleteButton.dataset.ruleDelete}`, { method: "DELETE" });
+      await refresh();
+    } catch (error) { showNotice(error.message, true); }
+  }
+});
+
 $("#generateMigrationToken").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
