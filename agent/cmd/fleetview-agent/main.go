@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.30.0"
+var version = "0.31.0"
 
 const serviceName = "fleetview-agent"
 
@@ -323,6 +323,43 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 			result.Output = composeOutput
 			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
 				logger.Printf("post-compose-up scan failed: %v", scanErr)
+			}
+		}
+	case "DOCKER_VOLUME_REMOVE":
+		if !dockerInventoryEnabled {
+			err = fmt.Errorf("Docker inventory and management are disabled for this device")
+			break
+		}
+		confirmed, _ := job.Options["confirmed"].(bool)
+		name, _ := job.Options["name"].(string)
+		if !confirmed {
+			err = fmt.Errorf("Docker volume removal requires confirmation")
+			break
+		}
+		err = containers.RemoveVolume(ctx, name)
+		if err == nil {
+			result.Output = fmt.Sprintf("Removed Docker volume %s", name)
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-volume-remove scan failed: %v", scanErr)
+			}
+		}
+	case "DOCKER_VOLUME_PRUNE":
+		if !dockerInventoryEnabled {
+			err = fmt.Errorf("Docker inventory and management are disabled for this device")
+			break
+		}
+		confirmed, _ := job.Options["confirmed"].(bool)
+		if !confirmed {
+			err = fmt.Errorf("Docker volume prune requires confirmation")
+			break
+		}
+		var deleted []string
+		var reclaimed uint64
+		deleted, reclaimed, err = containers.PruneVolumes(ctx)
+		if err == nil {
+			result.Output = fmt.Sprintf("Removed %d unused volume(s), reclaimed %d bytes: %s", len(deleted), reclaimed, strings.Join(deleted, ", "))
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-volume-prune scan failed: %v", scanErr)
 			}
 		}
 	case "SCAN_VULNERABILITIES":

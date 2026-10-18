@@ -772,6 +772,19 @@ FLEETVIEW_PORT=8080</code></pre>
           <p class="form-note">Runs <code>docker compose up -d</code> on this device with the given project/file. Requires agent 0.29.0+ and the <code>docker compose</code> CLI plugin on the endpoint. The job result (including any error) appears in this device's job history.</p>
         </form>
       </div>
+      <div id="dockerVolumesPanel" class="panel-body" hidden>
+        <div class="monitoring-heading">
+          <div><p class="eyebrow">STORAGE</p><h3>Volumes</h3></div>
+          <button id="pruneVolumesButton" type="button" class="secondary">Prune unused volumes</button>
+        </div>
+        <p class="form-note">A volume is "unused" when no container (running or stopped) references it. Removing one deletes its data permanently -- this cannot be undone. Requires agent 0.31.0+.</p>
+        <div class="table-wrap detail-table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Driver</th><th>Mountpoint</th><th>Created</th><th>Status</th><th></th></tr></thead>
+            <tbody id="dockerVolumeRows"></tbody>
+          </table>
+        </div>
+      </div>
       <p id="detailTableSummary" class="table-summary"></p>
       <div id="detailTableWrap" class="table-wrap detail-table-wrap">
         <table>

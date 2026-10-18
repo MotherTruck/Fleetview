@@ -1271,7 +1271,7 @@ function renderNetworkTopology() {
   </tr>`).join("") : '<tr><td colspan="5" class="empty">No DHCP leases synced yet.</td></tr>';
 }
 
-const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN", MIGRATE_SERVER: "Server migration" };
+const jobTypeLabels = { SCAN_DEVICE: "Patch scan", SCAN_VULNERABILITIES: "Vulnerability scan", INSTALL_UPDATES: "Install updates", INSTALL_APPROVED_UPDATES: "Approved patches", INSTALL_CUSTOM_PACKAGE: "Custom install", INSTALL_PACKAGE: "Install package", UNINSTALL_PACKAGE: "Uninstall package", DOCKER_CONTAINER_ACTION: "Docker action", DOCKER_COMPOSE_UP: "Compose deploy", DOCKER_VOLUME_REMOVE: "Remove volume", DOCKER_VOLUME_PRUNE: "Prune volumes", RUN_COMMAND: "Run command", UPGRADE_AGENT: "Agent upgrade", NETWORK_DIAGNOSTIC: "Network diagnostic", WAKE_ON_LAN: "Wake-on-LAN", MIGRATE_SERVER: "Server migration" };
 
 function renderJobs() {
   const names = Object.fromEntries(state.devices.map((device) => [device.id, device.hostname]));
@@ -2255,6 +2255,27 @@ function renderOverview(device) {
     ${wakeSection}`;
 }
 
+function renderDockerVolumes(device) {
+  const inventory = device.inventory || {};
+  const volumes = Array.isArray(inventory.docker_volumes) ? inventory.docker_volumes : [];
+  const versionParts = String(device.agent_version || "").split(".").map(Number);
+  const agentReady = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 31);
+  const canManage = state.user?.role !== "viewer" && agentReady && device.agent_settings?.docker_inventory_enabled !== false;
+  const unusedCount = volumes.filter((v) => !v.in_use).length;
+  $("#pruneVolumesButton").hidden = !canManage;
+  $("#pruneVolumesButton").disabled = unusedCount === 0;
+  $("#pruneVolumesButton").textContent = unusedCount > 0 ? `Prune unused volumes (${unusedCount})` : "Prune unused volumes";
+  $("#dockerVolumeRows").innerHTML = volumes.length ? volumes.map((volume) => `
+    <tr>
+      <td class="package-name">${escapeHtml(volume.name)}</td>
+      <td>${escapeHtml(volume.driver || "Unknown")}</td>
+      <td class="truncate" title="${escapeHtml(volume.mountpoint || "")}">${escapeHtml(volume.mountpoint || "")}</td>
+      <td>${escapeHtml(fullDate(volume.created_at))}</td>
+      <td><span class="pill ${volume.in_use ? "succeeded" : "severity-medium"}">${volume.in_use ? "In use" : "Unused"}</span></td>
+      <td>${canManage && !volume.in_use ? `<button type="button" class="danger" data-volume-remove="${escapeHtml(volume.name)}">Remove</button>` : "—"}</td>
+    </tr>`).join("") : `<tr><td colspan="6" class="empty">${agentReady ? "No Docker volumes were returned." : "Upgrade this device's agent to 0.31.0+ to see volumes."}</td></tr>`;
+}
+
 function renderDeviceDetails() {
   const device = state.detailDevice;
   if (!device) return;
@@ -2319,6 +2340,8 @@ function renderDeviceDetails() {
   $("#detailTableWrap").hidden = overview || monitoring || terminal || files;
   $("#patchControls").hidden = state.detailTab !== "patches";
   $("#dockerComposeCreator").hidden = state.detailTab !== "docker" || state.user?.role === "viewer";
+  $("#dockerVolumesPanel").hidden = state.detailTab !== "docker";
+  if (state.detailTab === "docker") renderDockerVolumes(device);
   $("#detailFootnote").textContent = "";
   if (overview) {
     renderOverview(device);
@@ -2713,6 +2736,37 @@ $("#detailTableBody").addEventListener("click", async event => {
     state.patchApprovals[device.id] = await api(`/api/v1/admin/devices/${device.id}/patch-approvals`);
     renderDeviceDetails();
     showNotice(current?.approved ? "Patch approval revoked." : "Patch approved for this version.");
+  } catch (error) { button.disabled = false; showNotice(error.message, true); }
+});
+$("#dockerVolumeRows").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-volume-remove]");
+  if (!button) return;
+  const device = state.detailDevice;
+  if (!device || state.user?.role === "viewer") return;
+  const name = button.dataset.volumeRemove;
+  if (!confirm(`Permanently delete the Docker volume "${name}" on ${device.hostname}?\n\nThis removes its data from disk and cannot be undone.`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({ type: "DOCKER_VOLUME_REMOVE", options: { name, confirmed: true } }),
+    });
+    showNotice(`Volume removal queued for ${name}. Check Jobs for the result.`);
+  } catch (error) { button.disabled = false; showNotice(error.message, true); }
+});
+$("#pruneVolumesButton").addEventListener("click", async () => {
+  const device = state.detailDevice;
+  if (!device) return;
+  const volumes = Array.isArray(device.inventory?.docker_volumes) ? device.inventory.docker_volumes : [];
+  const unused = volumes.filter((v) => !v.in_use);
+  if (!unused.length) return;
+  if (!confirm(`Permanently delete ${unused.length} unused Docker volume${unused.length === 1 ? "" : "s"} on ${device.hostname}?\n\n${unused.map((v) => v.name).join(", ")}\n\nThis removes their data from disk and cannot be undone.`)) return;
+  const button = $("#pruneVolumesButton");
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({ type: "DOCKER_VOLUME_PRUNE", options: { confirmed: true } }),
+    });
+    showNotice(`Volume prune queued for ${device.hostname}. Check Jobs for the result.`);
   } catch (error) { button.disabled = false; showNotice(error.message, true); }
 });
 $("#deployApprovedPatches").addEventListener("click", () => {

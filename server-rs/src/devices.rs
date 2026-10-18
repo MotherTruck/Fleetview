@@ -1249,6 +1249,8 @@ const ALLOWED_JOB_TYPES: &[&str] = &[
     "UNINSTALL_PACKAGE",
     "DOCKER_CONTAINER_ACTION",
     "DOCKER_COMPOSE_UP",
+    "DOCKER_VOLUME_REMOVE",
+    "DOCKER_VOLUME_PRUNE",
 ];
 
 // Mirrors deployment.rs/live.rs's own private copy of this same check --
@@ -1384,6 +1386,49 @@ async fn create_job(
             return Err(ApiError::bad_request(
                 "Container is not in this device's latest Docker inventory",
             ));
+        }
+    }
+    if payload.job_type == "DOCKER_VOLUME_REMOVE" || payload.job_type == "DOCKER_VOLUME_PRUNE" {
+        let version_ok = device
+            .agent_version
+            .as_deref()
+            .unwrap_or("")
+            .split('.')
+            .take(2)
+            .map(|p| p.parse::<i32>().unwrap_or(-1))
+            .collect::<Vec<_>>();
+        let supported = matches!(version_ok.as_slice(), [major, minor] if (*major, *minor) >= (0, 31));
+        if !supported {
+            return Err(ApiError::bad_request(
+                "Upgrade this device's native agent to 0.31.0 before managing Docker volumes",
+            ));
+        }
+        let docker_available = device.inventory.get("docker_available") == Some(&Value::Bool(true));
+        if !docker_available {
+            return Err(ApiError::bad_request("Docker is not available on this device"));
+        }
+        let confirmed = payload.options.get("confirmed") == Some(&Value::Bool(true));
+        if payload.job_type == "DOCKER_VOLUME_REMOVE" {
+            let name = payload.options.get("name").and_then(Value::as_str);
+            if !confirmed || name.is_none() || payload.options.len() != 2 {
+                return Err(ApiError::bad_request("A confirmed Docker volume name is required"));
+            }
+            let known = device.inventory.get("docker_volumes").and_then(Value::as_array);
+            let volume_known = known
+                .map(|list| {
+                    list.iter().any(|item| {
+                        item.get("name").and_then(Value::as_str) == name
+                            && item.get("in_use") != Some(&Value::Bool(true))
+                    })
+                })
+                .unwrap_or(false);
+            if !volume_known {
+                return Err(ApiError::bad_request(
+                    "Volume is not an unused volume in this device's latest Docker inventory",
+                ));
+            }
+        } else if !confirmed || payload.options.len() != 1 {
+            return Err(ApiError::bad_request("DOCKER_VOLUME_PRUNE requires options.confirmed=true"));
         }
     }
     if payload.job_type == "DOCKER_COMPOSE_UP" {

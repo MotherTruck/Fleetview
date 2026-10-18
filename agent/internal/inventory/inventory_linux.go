@@ -51,9 +51,14 @@ func Collect(dockerInventoryEnabled bool) (System, error) {
 		if dockerErr != nil {
 			details["docker_error"] = dockerErr.Error()
 		}
+		volumeCtx, volumeCancel := context.WithTimeout(context.Background(), 6*time.Second)
+		_, dockerVolumes, _ := containers.CollectVolumes(volumeCtx)
+		volumeCancel()
+		details["docker_volumes"] = dockerVolumes
 	} else {
 		details["docker_available"] = false
 		details["docker_containers"] = []containers.Container{}
+		details["docker_volumes"] = []containers.Volume{}
 	}
 	return System{
 		Hostname:     hostname,
