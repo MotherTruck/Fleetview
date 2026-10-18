@@ -20,6 +20,17 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictRealtime=true
 LockPersonality=true
+# No-op in practice (already root, so there's no additional privilege a
+# setuid/setgid exec could grant), but free to set and closes the one case
+# it isn't -- a file capability on something RUN_COMMAND execs.
+NoNewPrivileges=true
+# Deliberately NOT adding ProtectSystem=strict, CapabilityBoundingSet, or
+# SystemCallFilter here, despite being standard hardening advice: this
+# agent's actual job is running arbitrary admin-issued shell commands and
+# installing packages system-wide (RUN_COMMAND, INSTALL_PACKAGE, etc.) --
+# capabilities or a read-only filesystem would silently break legitimate
+# uses of those features rather than meaningfully containing a compromised
+# agent, which already has everything root has by design.
 
 [Install]
 WantedBy=multi-user.target
