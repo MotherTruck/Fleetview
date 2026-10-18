@@ -62,23 +62,25 @@ inventory data agents report — is worth protecting, because anyone else on
 that network can otherwise read or tamper with it in transit.
 
 **Recommended: enable TLS first, then point agents at the HTTPS address.**
-This takes one extra step over plain HTTP and the install scripts handle
-certificate trust for you automatically — see [`docs/TLS.md`](docs/TLS.md)
+The install scripts require a pinned CA fingerprint for an `https://`
+server URL (not just trust-on-first-use) — see [`docs/TLS.md`](docs/TLS.md)
 for the full walkthrough, or the short version:
 
 1. In `.env`, set `FLEETVIEW_TLS_HOSTNAME` to this machine's LAN address or
    hostname, and `FLEETVIEW_COOKIE_SECURE=true`.
 2. `sudo docker compose --profile tls up -d`
-3. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
-   `https://...:8443` address as the server URL when enrolling every agent.
+3. Get the CA's fingerprint (`docs/TLS.md` step 2) — a couple of one-line commands.
+4. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
+   `https://...:8443` address, plus the fingerprint, when enrolling every agent.
 
 **Plain HTTP instead, only if you understand the tradeoff** (e.g. a LAN you
-already fully trust and control):
-
-1. Find this machine's LAN address: `ip -4 addr show scope global`
-2. In `.env`, set `FLEETVIEW_BIND_ADDRESS` to that address (or `0.0.0.0` on a trusted network).
-3. Apply it: `sudo docker compose up -d`
-4. Point agents on other devices at that same address.
+already fully trust and control): set `FLEETVIEW_BIND_ADDRESS` in `.env` to
+this machine's LAN address (or `0.0.0.0`) instead of touching the TLS
+settings above, then `sudo docker compose up -d` and point agents at that
+address. The agent itself still refuses to enroll against a plain
+`http://` URL that isn't loopback unless you also set
+`FLEETVIEW_ALLOW_PLAINTEXT=true` in its config — a deliberate, explicit
+opt-in, not a silent default.
 
 Either way, never expose the server directly to the internet without HTTPS in front of it.
 

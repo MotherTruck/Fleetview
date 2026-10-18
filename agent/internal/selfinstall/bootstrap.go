@@ -17,9 +17,14 @@ import (
 // from a Payload instead. For an https:// server, it also does the same
 // trust-on-first-use CA bootstrap the PowerShell/bash installers do (see
 // docs/TLS.md) -- plain TOFU only, since there's no way to type a pinned
-// fingerprint into a double-click. An admin who wants that stronger
-// guarantee uses the equivalent PowerShell command instead (offered
-// alongside the downloadable installer for exactly that reason).
+// fingerprint into a double-click, unlike those scripts, which now
+// require one. An admin who wants that stronger guarantee uses the
+// equivalent PowerShell command instead (offered alongside the
+// downloadable installer for exactly that reason). This path's one
+// remaining backstop against plain (non-TLS) http:// to a non-local
+// server is config.Load's own refusal at agent startup, the same check
+// every install method goes through regardless of how the config file
+// was written.
 func WriteConfig(configPath, programDataDir string, payload Payload) error {
 	if err := os.MkdirAll(programDataDir, 0o700); err != nil {
 		return err

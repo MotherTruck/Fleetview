@@ -41,41 +41,21 @@ the first visit will show a certificate warning, since it's a private CA
 your browser doesn't already trust (see step 3 to fix that, or just accept
 the warning once for a quick test).
 
-## 2. Point agents at the HTTPS URL
-
-On **Agent → Add a new device**, set the management server URL to
-`https://<FLEETVIEW_TLS_HOSTNAME>:8443` instead of the plain-HTTP address,
-then generate the install command as usual — no other change needed.
-
-Both `scripts/remote-install-linux.sh` and `scripts/install-agent.ps1`
-detect the `https://` URL automatically and fetch Caddy's private CA
-themselves (from `/install/ca.crt`, which Caddy serves publicly for
-exactly this purpose) before installing anything else, then pin it via
-`FLEETVIEW_CA_FILE` in the agent's config. There's no manual CA
-distribution step for a normal install: the certificate is trusted
-correctly from the very first run.
-
-That one CA fetch happens over an unverified connection — trust-on-first-
-use, by default. The agent source tarball fetched right after it is
-checked against a SHA-256 the server publishes at image build time, which
-catches transport corruption or a MITM limited to tampering with only one
-of those two requests, but not one who actively controls the whole first
-connection (they could substitute a matching checksum for their own
-tarball too) -- only a certificate verified before anything trusts it
-closes that completely. Everything the agent does afterward, every job
-poll and result upload, validates against the pinned CA for real. If you
-want a stronger guarantee than trust-on-first-use for that one bootstrap
-fetch, see "pin the CA's fingerprint" in step 3 below — or pre-stage the
-CA file instead of letting the installer fetch it at all.
-
-## 3. Trust the certificate (browser, or a stronger guarantee than TOFU)
+## 2. Get the CA's fingerprint (required for install, and for your browser)
 
 Caddy's certificate is signed by a private CA it generates on first start,
 stored in the `fleetview-caddy-data` volume — not a certificate your
-system's trust store or browser already knows about. The install scripts
-handle agents automatically (step 2); this section is for your browser, or
-for a stronger guarantee than trust-on-first-use for the installer's own
-bootstrap fetch.
+system's trust store or browser already knows about, and not one the
+install scripts will blindly trust either: both
+`scripts/remote-install-linux.sh` and `scripts/install-agent.ps1` *require*
+a pinned fingerprint for an `https://` server URL and refuse to install
+without one. This is deliberate: fetching `/install/ca.crt` and trusting
+whatever comes back (trust-on-first-use) is exactly what an attacker who
+controls that one first connection defeats — they substitute their own CA,
+the installer trusts it, and the agent is theirs from the very first
+request. Pinning closes that: the fetched CA is verified against a
+fingerprint you already obtained from a channel you trust, before
+anything else happens.
 
 Extract the CA once:
 
@@ -89,26 +69,25 @@ If that path doesn't exist (Caddy's image has changed it), find the real one fir
 sudo docker compose exec caddy find /data -name root.crt
 ```
 
-**For your browser**, import `fleetview-ca.crt` into your OS or browser's
-trust store as a trusted root — this removes the certificate warning and
-gives a clean padlock.
-
-**For a stronger guarantee than TOFU, pin the CA's fingerprint.** The
-installers fetch `/install/ca.crt` over an unverified connection before
-trusting it — fine against a passive observer, but not against an active
-attacker on that one connection. Closing that gap doesn't require
-pre-staging the certificate file by hand (see below for that alternative):
-compute the fingerprint of the CA you just extracted, once, from a channel
-you trust (the machine running `docker compose`, not the endpoint being
-enrolled):
+Compute its SHA-256 fingerprint, from the machine running `docker compose`
+(not the endpoint being enrolled):
 
 ```bash
 openssl x509 -in fleetview-ca.crt -noout -fingerprint -sha256
 # SHA256 Fingerprint=14:4D:10:AA:FA:64:29:74:FE:39:0A:6E:68:52:16:27:...
 ```
 
-Then pass the hex (colons or not, case-insensitive — both installers
-normalize it either way) as an extra argument when enrolling each device:
+**For your browser**, import `fleetview-ca.crt` into your OS or browser's
+trust store as a trusted root — this removes the certificate warning and
+gives a clean padlock.
+
+## 3. Point agents at the HTTPS URL, with the pinned fingerprint
+
+On **Agent → Add a new device**, set the management server URL to
+`https://<FLEETVIEW_TLS_HOSTNAME>:8443` instead of the plain-HTTP address,
+then generate the install command as usual, adding the fingerprint hex from
+step 2 (colons or not, case-insensitive — both installers normalize it
+either way):
 
 ```bash
 curl -fsSL https://<host>:8443/install/linux.sh | sudo bash -s -- \
@@ -120,26 +99,33 @@ curl -fsSL https://<host>:8443/install/linux.sh | sudo bash -s -- \
   -CaFingerprint 144D10AAFA642974FE390A6E68521627E815F978B589DE32535C36EA30DC6503
 ```
 
-With a fingerprint supplied, the installer still fetches `/install/ca.crt`
-over that same first connection, but now verifies the result against it
-before trusting anything — a substituted CA is rejected and the install
-aborts — and every request after that (the agent source tarball and its
-checksum included) is fully TLS-verified via `--cacert`, not just fetched
-over the same unverified connection. Omit the argument and both installers
-behave exactly as before: full TOFU, no verification.
+With that fingerprint, the installer fetches `/install/ca.crt` over the
+first connection but verifies the result against it before trusting
+anything — a substituted CA is rejected and the install aborts — and every
+request after that (the agent source tarball and its checksum included) is
+fully TLS-verified via `--cacert`, not just fetched over the same
+unverified connection. `FLEETVIEW_CA_FILE` in the agent's config then
+pins the same CA for everything the agent does afterward, every job poll
+and result upload included.
+
+**If pinning genuinely isn't practical** (e.g. a quick lab test), pass
+`--insecure-tofu` (bash) or `-InsecureTofu` (PowerShell) instead of a
+fingerprint to fall back to trust-on-first-use -- the installer will say so
+plainly, and this is not recommended for anything handling real credentials.
 
 **For pre-staging the file instead of fetching it at all**, copy
 `fleetview-ca.crt` to the endpoint ahead of running the install command and
 set `FLEETVIEW_CA_FILE` in `/etc/fleetview-agent/agent.env` (Linux) or
 `%ProgramData%\fleetview-agent\agent.env` (Windows) to its path before
-starting the service.
+starting the service — no fingerprint argument needed in this case, since
+you're supplying the trusted CA directly rather than fetching it.
 
-**Skipping validation entirely** is also still available: set
+**Skipping TLS verification entirely** is also still available: set
 `FLEETVIEW_ALLOW_INSECURE_TLS=true` in the agent's config instead of
 `FLEETVIEW_CA_FILE`. Traffic is still encrypted, but the agent no longer
 verifies it's actually talking to your server rather than something else
 on the network path — there's little reason to choose this now that CA
-pinning happens automatically, but it remains available (e.g. if
+pinning is the normal path, but it remains available (e.g. if
 `/install/ca.crt` is unreachable for some reason).
 
 ## Notes

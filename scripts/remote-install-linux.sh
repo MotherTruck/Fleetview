@@ -5,8 +5,22 @@ server_url="${1:-}"
 enrollment_token="${2:-}"
 expected_ca_fingerprint="${3:-}"
 if [[ -z "$server_url" || -z "$enrollment_token" ]]; then
-  echo "Usage: install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN [CA_SHA256_FINGERPRINT]" >&2
+  echo "Usage: install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN CA_SHA256_FINGERPRINT" >&2
+  echo "       install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN --insecure-tofu   (skip pinning -- not recommended)" >&2
   exit 2
+fi
+# A pinned fingerprint is required for an https:// server -- trust-on-
+# first-use alone (fetching /install/ca.crt and trusting whatever comes
+# back) is exactly what an active first-connection attacker defeats: they
+# substitute their own CA and this install trusts it. docs/TLS.md explains
+# how to get the real fingerprint out-of-band. --insecure-tofu is the
+# explicit, deliberate opt-out for when that genuinely isn't practical.
+if [[ "$server_url" == https://* && -z "$expected_ca_fingerprint" ]]; then
+  echo "SERVER_URL is https:// but no CA_SHA256_FINGERPRINT was given -- refusing to install with only trust-on-first-use. See docs/TLS.md to get the fingerprint, or pass --insecure-tofu to proceed without pinning." >&2
+  exit 2
+fi
+if [[ "$expected_ca_fingerprint" == "--insecure-tofu" ]]; then
+  expected_ca_fingerprint=""
 fi
 # Normalize to bare uppercase hex (strip colons/spaces) so it matches
 # regardless of how the admin copied it -- openssl prints it

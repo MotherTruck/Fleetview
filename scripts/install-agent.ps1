@@ -15,24 +15,34 @@
 .PARAMETER EnrollmentToken
     The one-time token from the dashboard's Agent -> Add a new device page.
 .PARAMETER CaFingerprint
-    Optional SHA-256 fingerprint of the server's private CA (see
-    docs/TLS.md). When set, the CA fetched from /install/ca.crt is verified
-    against it before being trusted -- and, unlike before, that trust now
-    also covers the manifest and binary downloads below, not just the CA
-    file itself. Omit it to keep the default TOFU behavior.
+    SHA-256 fingerprint of the server's private CA (see docs/TLS.md),
+    required when -ServerUrl is https://. Trust-on-first-use alone (fetching
+    /install/ca.crt and trusting whatever comes back) is exactly what an
+    active first-connection attacker defeats -- they substitute their own
+    CA and this install trusts it. Pass -InsecureTofu instead to proceed
+    without pinning if that genuinely isn't practical.
+.PARAMETER InsecureTofu
+    Explicit opt-out of CA fingerprint pinning for an https:// server --
+    falls back to trust-on-first-use. Not recommended; see -CaFingerprint.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ServerUrl,
     [Parameter(Mandatory = $true)][string]$EnrollmentToken,
-    [string]$CaFingerprint = ""
+    [string]$CaFingerprint = "",
+    [switch]$InsecureTofu
 )
+
+$ErrorActionPreference = "Stop"
+$ServerUrl = $ServerUrl.TrimEnd('/')
+
+if ($ServerUrl -like "https://*" -and [string]::IsNullOrEmpty($CaFingerprint) -and -not $InsecureTofu) {
+    Write-Error "-ServerUrl is https:// but no -CaFingerprint was given -- refusing to install with only trust-on-first-use. See docs/TLS.md to get the fingerprint, or pass -InsecureTofu to proceed without pinning."
+    exit 2
+}
 
 # Normalize to bare uppercase hex so it matches regardless of how the admin
 # copied it -- openssl prints it colon-separated, browsers often don't.
 $CaFingerprint = ($CaFingerprint -replace '[:\s]', '').ToUpperInvariant()
-
-$ErrorActionPreference = "Stop"
-$ServerUrl = $ServerUrl.TrimEnd('/')
 
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     Write-Error "Missing dependency: winget. Install 'App Installer' from the Microsoft Store before continuing."

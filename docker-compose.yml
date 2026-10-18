@@ -51,6 +51,12 @@ services:
       # never from outside.
       FORWARDED_ALLOW_IPS: "127.0.0.1,172.28.0.10"
     ports:
+      # This is the plain-HTTP port. Widening FLEETVIEW_BIND_ADDRESS
+      # beyond loopback publishes it to the LAN unencrypted -- fine only
+      # for a LAN you fully trust (see the README); the recommended path
+      # for reaching this from elsewhere is the tls profile below, which
+      # uses its own separate FLEETVIEW_TLS_BIND_ADDRESS so turning TLS on
+      # never also widens this plaintext port.
       - "${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}:${FLEETVIEW_PORT:-8080}:8080"
     # Uses the image's own HEALTHCHECK (server/Dockerfile) rather than
     # redeclaring it here.
@@ -78,7 +84,14 @@ services:
       - fleetview-caddy-data:/data
       - fleetview-caddy-config:/config
     ports:
-      - "${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}:${FLEETVIEW_TLS_PORT:-8443}:8443"
+      # Deliberately its own variable, not FLEETVIEW_BIND_ADDRESS (which
+      # controls the plain-HTTP server's port below): sharing one meant
+      # widening FLEETVIEW_BIND_ADDRESS to reach Caddy from the LAN also
+      # widened the plaintext :8080 port to the LAN in the same step,
+      # defeating the point of turning TLS on. Defaults to 0.0.0.0 since
+      # enabling this profile is itself the deliberate choice to expose
+      # the dashboard beyond this machine -- encrypted, via Caddy only.
+      - "${FLEETVIEW_TLS_BIND_ADDRESS:-0.0.0.0}:${FLEETVIEW_TLS_PORT:-8443}:8443"
     networks:
       frontend:
         ipv4_address: 172.28.0.10

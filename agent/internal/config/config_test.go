@@ -44,6 +44,57 @@ func TestUpdateServerURLReplacesExistingLine(t *testing.T) {
 	}
 }
 
+func TestLoadRefusesPlaintextToNonLocalAddress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.env")
+	if err := os.WriteFile(path, []byte("FLEETVIEW_SERVER_URL=http://192.168.1.50:8080\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected Load to refuse plain HTTP to a non-local address")
+	}
+	if !strings.Contains(err.Error(), "FLEETVIEW_ALLOW_PLAINTEXT") {
+		t.Fatalf("expected the error to mention the opt-out, got: %v", err)
+	}
+}
+
+func TestLoadAllowsPlaintextWithExplicitOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.env")
+	content := "FLEETVIEW_SERVER_URL=http://192.168.1.50:8080\nFLEETVIEW_ALLOW_PLAINTEXT=true\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load with explicit opt-out: %v", err)
+	}
+	if cfg.ServerURL != "http://192.168.1.50:8080" {
+		t.Fatalf("ServerURL = %q", cfg.ServerURL)
+	}
+}
+
+func TestLoadAllowsPlaintextLoopbackByDefault(t *testing.T) {
+	for _, serverURL := range []string{"http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"} {
+		path := filepath.Join(t.TempDir(), "agent.env")
+		if err := os.WriteFile(path, []byte("FLEETVIEW_SERVER_URL="+serverURL+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err != nil {
+			t.Errorf("Load(%q) should not require FLEETVIEW_ALLOW_PLAINTEXT for loopback, got: %v", serverURL, err)
+		}
+	}
+}
+
+func TestLoadAllowsHTTPSToAnyAddressWithoutOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.env")
+	if err := os.WriteFile(path, []byte("FLEETVIEW_SERVER_URL=https://fleet.example.com:8443\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load with https:// should not require FLEETVIEW_ALLOW_PLAINTEXT, got: %v", err)
+	}
+}
+
 func TestUpdateServerURLAppendsWhenMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.env")
 	if err := os.WriteFile(path, []byte("FLEETVIEW_SCAN_INTERVAL_SECONDS=900\n"), 0600); err != nil {

@@ -3,6 +3,8 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,7 +20,25 @@ type Config struct {
 	JobPollInterval  time.Duration
 	RequestTimeout   time.Duration
 	AllowInsecureTLS bool
+	AllowPlaintext   bool
 	CAFile           string
+}
+
+// isLoopbackPlaintextTarget reports whether serverURL is plain http:// to a
+// loopback address -- the one case plaintext doesn't involve a network hop
+// (agent and server on the same machine, e.g. local dev), so it's exempt
+// from the plaintext refusal below.
+func isLoopbackPlaintextTarget(serverURL string) bool {
+	parsed, err := url.Parse(serverURL)
+	if err != nil || parsed.Scheme != "http" {
+		return false
+	}
+	host := parsed.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func Load(path string) (Config, error) {
@@ -60,6 +80,7 @@ func Load(path string) (Config, error) {
 		return time.Duration(value) * time.Second
 	}
 	allowInsecure, _ := strconv.ParseBool(lookup("FLEETVIEW_ALLOW_INSECURE_TLS", "false"))
+	allowPlaintext, _ := strconv.ParseBool(lookup("FLEETVIEW_ALLOW_PLAINTEXT", "false"))
 	result := Config{
 		ServerURL:        strings.TrimRight(lookup("FLEETVIEW_SERVER_URL", "http://127.0.0.1:8080"), "/"),
 		EnrollmentToken:  lookup("FLEETVIEW_ENROLLMENT_TOKEN", ""),
@@ -69,10 +90,27 @@ func Load(path string) (Config, error) {
 		JobPollInterval:  parseSeconds("FLEETVIEW_JOB_POLL_SECONDS", 10),
 		RequestTimeout:   parseSeconds("FLEETVIEW_REQUEST_TIMEOUT_SECONDS", 60),
 		AllowInsecureTLS: allowInsecure,
+		AllowPlaintext:   allowPlaintext,
 		CAFile:           lookup("FLEETVIEW_CA_FILE", ""),
 	}
 	if result.ServerURL == "" {
 		return Config{}, fmt.Errorf("FLEETVIEW_SERVER_URL is required")
+	}
+	// Fail closed: this agent sends its enrollment token, then a
+	// permanent bearer credential, then every job result, on every
+	// request -- over plain HTTP to anything but the local machine, an
+	// on-path observer reads all of it (see docs/TLS.md and the fleet
+	// security review this responds to). Loopback is exempt since there's
+	// no network hop for anything to observe.
+	if !result.AllowPlaintext && !isLoopbackPlaintextTarget(result.ServerURL) {
+		if parsed, err := url.Parse(result.ServerURL); err == nil && parsed.Scheme == "http" {
+			return Config{}, fmt.Errorf(
+				"FLEETVIEW_SERVER_URL (%s) is plain HTTP to a non-local address -- this would send the agent's "+
+					"credentials and every job result in clear text. Use an https:// URL (see docs/TLS.md), or set "+
+					"FLEETVIEW_ALLOW_PLAINTEXT=true to proceed anyway if you understand the risk",
+				result.ServerURL,
+			)
+		}
 	}
 	return result, nil
 }
