@@ -55,6 +55,24 @@ async fn uninstall_requires_confirmation_and_literal_name() {
 }
 
 #[tokio::test]
+async fn install_package_also_requires_confirmation() {
+    // INSTALL_PACKAGE used to accept a valid package name with no
+    // confirmed flag at all, unlike UNINSTALL_PACKAGE right above --
+    // flagged by an external security review as an inconsistent gate on
+    // an otherwise-equally-consequential action (installing an arbitrary
+    // package fleet-wide).
+    let server = TestServer::start().await;
+    server.seed_device_full("one", "debian", "linux", "apt", "0.20.0", "unused", json!([]), json!({}), None).await;
+    let (client, csrf) = setup_admin(&server).await;
+
+    let missing_confirmed = create_job(&client, &server, &csrf, "one", "INSTALL_PACKAGE", json!({"package": "htop"})).await;
+    assert_eq!(missing_confirmed.status(), 400, "{}", missing_confirmed.text().await.unwrap());
+
+    let ok = create_job(&client, &server, &csrf, "one", "INSTALL_PACKAGE", json!({"package": "htop", "confirmed": true})).await;
+    assert_eq!(ok.status(), 201, "{}", ok.text().await.unwrap());
+}
+
+#[tokio::test]
 async fn docker_actions_require_known_container_and_confirmation() {
     let server = TestServer::start().await;
     let container_id = "abcdef012345";

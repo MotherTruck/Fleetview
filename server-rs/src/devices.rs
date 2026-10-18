@@ -1443,8 +1443,13 @@ async fn create_job(
             return Err(ApiError::bad_request("A single literal package name or ID is required"));
         }
     }
-    if payload.job_type == "UNINSTALL_PACKAGE" && payload.options.get("confirmed") != Some(&Value::Bool(true)) {
-        return Err(ApiError::bad_request("UNINSTALL_PACKAGE requires options.confirmed=true"));
+    if matches!(payload.job_type.as_str(), "INSTALL_PACKAGE" | "UNINSTALL_PACKAGE")
+        && payload.options.get("confirmed") != Some(&Value::Bool(true))
+    {
+        return Err(ApiError::bad_request(format!(
+            "{} requires options.confirmed=true",
+            payload.job_type
+        )));
     }
     if payload.job_type == "DOCKER_CONTAINER_ACTION" {
         let version_ok = device

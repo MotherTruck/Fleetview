@@ -1777,7 +1777,7 @@ async function deployPackage(deviceIds, packageName) {
   const results = await Promise.allSettled(deviceIds.map((deviceId) =>
     api(`/api/v1/admin/devices/${deviceId}/jobs`, {
       method: "POST",
-      body: JSON.stringify({ type: "INSTALL_PACKAGE", options: { package: packageName } }),
+      body: JSON.stringify({ type: "INSTALL_PACKAGE", options: { package: packageName, confirmed: true } }),
     })
   ));
   const failed = results.filter((result) => result.status === "rejected");
