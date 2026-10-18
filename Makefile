@@ -15,8 +15,7 @@ logs:
 # Postgres reachable as `sudo -u postgres psql`, with a `fleetview` role
 # that owns the per-test databases it creates and drops -- see
 # server-rs/tests/common/mod.rs -- and the agent's cross-platform build
-# checks need no services at all). server/tests (the Python implementation
-# this replaced) is retired and no longer run here.
+# checks need no services at all).
 test:
 	cd server-rs && cargo test -- --test-threads=4
 	cd agent && go build ./... && go vet ./... && go test ./...
@@ -28,4 +27,4 @@ agent:
 package:
 	mkdir -p dist
 	project_dir="$$(basename "$$(pwd)")"; \
-	tar --exclude="$$project_dir/.env" --exclude="$$project_dir/dist" --exclude="$$project_dir/agent/bin" --exclude='__pycache__' --exclude='*.pyc' -C .. -czf dist/fleetview-mvp-$(PROJECT_VERSION).tar.gz "$$project_dir"
+	tar --exclude="$$project_dir/.env" --exclude="$$project_dir/dist" --exclude="$$project_dir/agent/bin" -C .. -czf dist/fleetview-mvp-$(PROJECT_VERSION).tar.gz "$$project_dir"
