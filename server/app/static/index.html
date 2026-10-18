@@ -577,9 +577,12 @@ FLEETVIEW_PORT=8080</code></pre>
               </label>
               <label id="ruleThresholdField" hidden>Threshold<input id="ruleThreshold" type="number" min="1" step="1"></label>
               <label>Only devices tagged (optional)<input id="ruleTagFilter" type="text" placeholder="e.g. production"></label>
+              <label>Also run this script when it fires (optional)
+                <select id="ruleActionScript"><option value="">None -- notify only</option></select>
+              </label>
               <button type="submit">Add rule</button>
             </form>
-            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Condition</th><th>Scope</th><th>Enabled</th><th>Action</th></tr></thead><tbody id="alertRuleRows"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Condition</th><th>Scope</th><th>Action script</th><th>Enabled</th><th></th></tr></thead><tbody id="alertRuleRows"></tbody></table></div>
           </div>
         </section>
 

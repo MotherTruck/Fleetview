@@ -11,7 +11,7 @@ use axum::{Json, Router};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -144,14 +144,25 @@ async fn run_script(
     admin: Admin,
     Path((device_id, script_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let actor = admin.0.user().map(|u| u.username.to_string()).unwrap_or_else(|| "bootstrap".to_string());
+    let (job_id, script_name) = queue_script_run(&state.db, &device_id, &script_id, &actor).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "id": job_id, "device_id": device_id, "script": script_name }))))
+}
+
+/// Queues `script_id` against `device_id` as a RUN_COMMAND job and logs it
+/// to account_audit, exactly like the HTTP handler above -- shared with
+/// alerting.rs's monitor-triggered automation (an alert rule's optional
+/// action_script_id), where `actor` is "alert: <rule name>" instead of a
+/// signed-in admin's username.
+pub async fn queue_script_run(db: &PgPool, device_id: &str, script_id: &str, actor: &str) -> Result<(String, String), ApiError> {
     let device = sqlx::query_as::<_, Device>(
         "SELECT id, hostname, display_name, platform, os_name, os_version, architecture, \
          package_manager, agent_version, agent_token_hash, enrolled_at, last_seen, inventory, \
          installed_packages, available_updates, update_count, security_update_count, last_scan_at \
          FROM devices WHERE id = $1",
     )
-    .bind(&device_id)
-    .fetch_optional(&state.db)
+    .bind(device_id)
+    .fetch_optional(db)
     .await?;
     let Some(device) = device else {
         return Err(ApiError::not_found("Device not found"));
@@ -160,8 +171,8 @@ async fn run_script(
         return Err(ApiError::conflict("Upgrade this device's existing agent to 0.16.0 and run a patch scan first"));
     }
     let script_row = sqlx::query("SELECT name, platform, body FROM scripts WHERE id = $1")
-        .bind(&script_id)
-        .fetch_optional(&state.db)
+        .bind(script_id)
+        .fetch_optional(db)
         .await?;
     let Some(script_row) = script_row else {
         return Err(ApiError::not_found("Script not found"));
@@ -177,9 +188,8 @@ async fn run_script(
     }
 
     let job_id = Uuid::new_v4().to_string();
-    let mut tx = state.db.begin().await?;
-    crate::models::insert_job(&mut *tx, &job_id, &device_id, "RUN_COMMAND", json!({ "command": body, "confirmed": true })).await?;
-    let actor = admin.0.user().map(|u| u.username.as_str()).unwrap_or("bootstrap");
+    let mut tx = db.begin().await?;
+    crate::models::insert_job(&mut *tx, &job_id, device_id, "RUN_COMMAND", json!({ "command": body, "confirmed": true })).await?;
     let details: String = format!("script: {script_name}").chars().take(255).collect();
     sqlx::query("INSERT INTO account_audit (actor, action, target, details, created_at) VALUES ($1, 'run_command', $2, $3, now())")
         .bind(actor)
@@ -188,5 +198,5 @@ async fn run_script(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(json!({ "id": job_id, "device_id": device_id, "script": script_name }))))
+    Ok((job_id, script_name))
 }

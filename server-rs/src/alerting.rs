@@ -203,6 +203,8 @@ struct RulePayload {
     tag_filter: Option<String>,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    action_script_id: Option<String>,
 }
 
 const VALID_KINDS: &[&str] = &["device_offline", "resource_threshold", "vulnerability_found", "job_failed"];
@@ -236,12 +238,12 @@ fn validate_rule(payload: &RulePayload) -> Result<(), ApiError> {
     Ok(())
 }
 
+const RULE_COLUMNS: &str = "id, name, kind, metric, threshold_value, tag_filter, enabled, action_script_id, created_at";
+
 async fn list_rules(State(state): State<Arc<AppState>>, _admin: Admin) -> Result<Json<Vec<Value>>, ApiError> {
-    let rows = sqlx::query(
-        "SELECT id, name, kind, metric, threshold_value, tag_filter, enabled, created_at FROM alert_rules ORDER BY created_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let rows = sqlx::query(&format!("SELECT {RULE_COLUMNS} FROM alert_rules ORDER BY created_at DESC"))
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(rows.iter().map(rule_view).collect()))
 }
 
@@ -254,8 +256,21 @@ fn rule_view(row: &sqlx::postgres::PgRow) -> Value {
         "threshold_value": row.get::<Option<f64>, _>("threshold_value"),
         "tag_filter": row.get::<Option<String>, _>("tag_filter"),
         "enabled": row.get::<bool, _>("enabled"),
+        "action_script_id": row.get::<Option<String>, _>("action_script_id"),
         "created_at": row.get::<chrono::DateTime<Utc>, _>("created_at"),
     })
+}
+
+async fn validate_action_script(db: &sqlx::PgPool, script_id: &Option<String>) -> Result<(), ApiError> {
+    let Some(script_id) = script_id else { return Ok(()) };
+    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM scripts WHERE id = $1")
+        .bind(script_id)
+        .fetch_optional(db)
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::bad_request("action_script_id does not match a saved script"));
+    }
+    Ok(())
 }
 
 async fn create_rule(
@@ -264,10 +279,11 @@ async fn create_rule(
     Json(payload): Json<RulePayload>,
 ) -> Result<impl IntoResponse, ApiError> {
     validate_rule(&payload)?;
+    validate_action_script(&state.db, &payload.action_script_id).await?;
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO alert_rules (id, name, kind, metric, threshold_value, tag_filter, enabled) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO alert_rules (id, name, kind, metric, threshold_value, tag_filter, enabled, action_script_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(&id)
     .bind(payload.name.trim())
@@ -276,9 +292,10 @@ async fn create_rule(
     .bind(payload.threshold_value)
     .bind(payload.tag_filter.as_deref().map(str::trim).filter(|s| !s.is_empty()))
     .bind(payload.enabled)
+    .bind(&payload.action_script_id)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query("SELECT id, name, kind, metric, threshold_value, tag_filter, enabled, created_at FROM alert_rules WHERE id = $1")
+    let row = sqlx::query(&format!("SELECT {RULE_COLUMNS} FROM alert_rules WHERE id = $1"))
         .bind(&id)
         .fetch_one(&state.db)
         .await?;
@@ -292,8 +309,9 @@ async fn update_rule(
     Json(payload): Json<RulePayload>,
 ) -> Result<Json<Value>, ApiError> {
     validate_rule(&payload)?;
+    validate_action_script(&state.db, &payload.action_script_id).await?;
     let result = sqlx::query(
-        "UPDATE alert_rules SET name=$1, kind=$2, metric=$3, threshold_value=$4, tag_filter=$5, enabled=$6 WHERE id=$7",
+        "UPDATE alert_rules SET name=$1, kind=$2, metric=$3, threshold_value=$4, tag_filter=$5, enabled=$6, action_script_id=$7 WHERE id=$8",
     )
     .bind(payload.name.trim())
     .bind(&payload.kind)
@@ -301,13 +319,14 @@ async fn update_rule(
     .bind(payload.threshold_value)
     .bind(payload.tag_filter.as_deref().map(str::trim).filter(|s| !s.is_empty()))
     .bind(payload.enabled)
+    .bind(&payload.action_script_id)
     .bind(&id)
     .execute(&state.db)
     .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("Alert rule not found"));
     }
-    let row = sqlx::query("SELECT id, name, kind, metric, threshold_value, tag_filter, enabled, created_at FROM alert_rules WHERE id = $1")
+    let row = sqlx::query(&format!("SELECT {RULE_COLUMNS} FROM alert_rules WHERE id = $1"))
         .bind(&id)
         .fetch_one(&state.db)
         .await?;
@@ -326,8 +345,8 @@ async fn delete_rule(State(state): State<Arc<AppState>>, _admin: Admin, Path(id)
 /// so a slow or unreachable webhook never adds latency to the agent's
 /// job-completion request.
 pub async fn notify_job_failed(db: &PgPool, device: &Device, job_type: &str, job_id: &str, error: Option<&str>) {
-    let has_rule = matching_enabled_rule_exists(db, "job_failed", device).await;
-    if !has_rule {
+    let rules = matching_enabled_rules(db, "job_failed", device).await;
+    if rules.is_empty() {
         return;
     }
     let name = device_label(device);
@@ -337,18 +356,40 @@ pub async fn notify_job_failed(db: &PgPool, device: &Device, job_type: &str, job
         error.map(|e| format!(" Error: {e}")).unwrap_or_default()
     );
     notify_all_channels(db, &title, &message).await;
+    for (rule_name, action_script_id) in rules {
+        trigger_action(db, action_script_id, device, &rule_name).await;
+    }
 }
 
-async fn matching_enabled_rule_exists(db: &PgPool, kind: &str, device: &Device) -> bool {
-    let rules = sqlx::query("SELECT tag_filter FROM alert_rules WHERE kind = $1 AND enabled = true")
+async fn matching_enabled_rules(db: &PgPool, kind: &str, device: &Device) -> Vec<(String, Option<String>)> {
+    let rules = sqlx::query("SELECT name, tag_filter, action_script_id FROM alert_rules WHERE kind = $1 AND enabled = true")
         .bind(kind)
         .fetch_all(db)
         .await;
-    let Ok(rules) = rules else { return false };
-    rules.iter().any(|row| {
-        let tag_filter: Option<String> = row.get("tag_filter");
-        rule_matches_device_tag(tag_filter.as_deref(), device)
-    })
+    let Ok(rules) = rules else { return Vec::new() };
+    rules
+        .into_iter()
+        .filter(|row| {
+            let tag_filter: Option<String> = row.get("tag_filter");
+            rule_matches_device_tag(tag_filter.as_deref(), device)
+        })
+        .map(|row| (row.get::<String, _>("name"), row.get::<Option<String>, _>("action_script_id")))
+        .collect()
+}
+
+/// Runs a rule's action_script_id against the device that tripped it, if
+/// one is configured -- this is the "monitor-triggered automation" half
+/// of an alert rule, on top of (never instead of) notifying every
+/// channel. Errors (agent too old, script already deleted) are logged,
+/// not propagated: a broken action must never block the notification
+/// that already went out, or stop the evaluation loop from moving on to
+/// the next rule/device.
+async fn trigger_action(db: &PgPool, action_script_id: Option<String>, device: &Device, rule_name: &str) {
+    let Some(script_id) = action_script_id else { return };
+    let actor = format!("alert: {rule_name}");
+    if let Err(error) = crate::scripts::queue_script_run(db, &device.id, &script_id, &actor).await {
+        tracing::warn!("alert rule {rule_name:?} action script failed to queue for {}: {}", device_label(device), error.message);
+    }
 }
 
 fn rule_matches_device_tag(tag_filter: Option<&str>, device: &Device) -> bool {
@@ -378,7 +419,7 @@ pub async fn evaluate_loop(db: PgPool) {
 
 async fn evaluate_once(db: &PgPool) -> Result<(), sqlx::Error> {
     let rules = sqlx::query(
-        "SELECT id, name, kind, metric, threshold_value, tag_filter FROM alert_rules \
+        "SELECT id, name, kind, metric, threshold_value, tag_filter, action_script_id FROM alert_rules \
          WHERE enabled = true AND kind != 'job_failed'",
     )
     .fetch_all(db)
@@ -402,6 +443,7 @@ async fn evaluate_once(db: &PgPool) -> Result<(), sqlx::Error> {
         let metric: Option<String> = rule_row.get("metric");
         let threshold: Option<f64> = rule_row.get("threshold_value");
         let tag_filter: Option<String> = rule_row.get("tag_filter");
+        let action_script_id: Option<String> = rule_row.get("action_script_id");
 
         for device in &devices {
             if !rule_matches_device_tag(tag_filter.as_deref(), device) {
@@ -430,6 +472,7 @@ async fn evaluate_once(db: &PgPool) -> Result<(), sqlx::Error> {
                     &detail.unwrap_or_else(|| format!("{rule_name} is firing for {name}.")),
                 )
                 .await;
+                trigger_action(db, action_script_id.clone(), device, &rule_name).await;
             } else if !firing && already_firing {
                 sqlx::query("DELETE FROM alert_firings WHERE rule_id = $1 AND device_id = $2")
                     .bind(&rule_id)

@@ -1550,17 +1550,24 @@ function renderChannels() {
 
 function renderAlertRules() {
   const tbody = $("#alertRuleRows");
+  const scriptName = (id) => state.scripts.find((item) => item.id === id)?.name;
   tbody.innerHTML = state.alertRules.length ? state.alertRules.map((rule) => `
     <tr>
       <td>${escapeHtml(rule.name)}</td>
       <td>${escapeHtml(ruleConditionText(rule))}</td>
       <td>${rule.tag_filter ? `<span class="pill tag-pill">${escapeHtml(rule.tag_filter)}</span>` : "Whole fleet"}</td>
+      <td>${rule.action_script_id ? escapeHtml(scriptName(rule.action_script_id) || "Deleted script") : "—"}</td>
       <td><span class="pill ${rule.enabled ? "succeeded" : "unknown"}">${rule.enabled ? "Yes" : "No"}</span></td>
       <td class="device-actions">
         <button type="button" class="secondary" data-rule-toggle="${escapeHtml(rule.id)}">${rule.enabled ? "Disable" : "Enable"}</button>
         <button type="button" class="danger" data-rule-delete="${escapeHtml(rule.id)}">Delete</button>
       </td>
-    </tr>`).join("") : '<tr><td colspan="5" class="empty">No alert rules configured yet.</td></tr>';
+    </tr>`).join("") : '<tr><td colspan="6" class="empty">No alert rules configured yet.</td></tr>';
+  const select = $("#ruleActionScript");
+  const previous = select.value;
+  select.innerHTML = '<option value="">None -- notify only</option>'
+    + state.scripts.map((script) => `<option value="${escapeHtml(script.id)}">${escapeHtml(script.name)}</option>`).join("");
+  if (state.scripts.some((script) => script.id === previous)) select.value = previous;
 }
 
 function renderComplianceTrends() {
@@ -3334,6 +3341,7 @@ $("#alertRuleForm").addEventListener("submit", async (event) => {
     name: $("#ruleName").value.trim(),
     kind,
     tag_filter: $("#ruleTagFilter").value.trim() || null,
+    action_script_id: $("#ruleActionScript").value || null,
   };
   if (kind === "resource_threshold") {
     body.metric = $("#ruleMetric").value;
@@ -3359,7 +3367,7 @@ $("#alertRuleRows").addEventListener("click", async (event) => {
     try {
       await api(`/api/v1/admin/alert-rules/${rule.id}`, {
         method: "PUT",
-        body: JSON.stringify({ name: rule.name, kind: rule.kind, metric: rule.metric, threshold_value: rule.threshold_value, tag_filter: rule.tag_filter, enabled: !rule.enabled }),
+        body: JSON.stringify({ name: rule.name, kind: rule.kind, metric: rule.metric, threshold_value: rule.threshold_value, tag_filter: rule.tag_filter, enabled: !rule.enabled, action_script_id: rule.action_script_id }),
       });
       await refresh();
     } catch (error) { showNotice(error.message, true); }
