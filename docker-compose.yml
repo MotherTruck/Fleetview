@@ -1,24 +1,13 @@
 # ============================================================================
-# EDIT ME: two things to set before starting FleetView for the first time.
-#
-# 1. Replace POSTGRES_PASSWORD and ADMIN_TOKEN just below with your own
-#    random values -- generate each with:
-#      openssl rand -hex 32
-#    (run it twice; use a different value for each). The server refuses to
-#    start if either is left at its placeholder.
-#
-# 2. DASHBOARD_ADDRESS, right under that, controls who can reach the
-#    dashboard -- defaults to every network interface this machine has
-#    (like most Docker containers' published ports), so it's reachable
-#    from other devices on your network out of the box. This is plain
-#    HTTP, not encrypted -- fine on a LAN you trust; see "Reaching it
-#    from other devices" in README.md for an encrypted option, or to
-#    restrict it instead:
-#      "0.0.0.0:8080:8080"      -> every interface (default)
-#      "127.0.0.1:8080:8080"    -> only this machine
-#      "192.168.1.50:8080:8080" -> just that one interface
-#
-# Everything else in this file has a working default.
+# EDIT ME: before starting FleetView for the first time, replace
+# POSTGRES_PASSWORD and ADMIN_TOKEN just below with your own random
+# values -- generate each with:
+#   openssl rand -hex 32
+# (run it twice; use a different value for each). The server refuses to
+# start if either is left at its placeholder. Everything else in this
+# file has a working default (the dashboard's port, further down under
+# the server service, is one you may want to look at too -- see
+# "Reaching it from other devices" in README.md).
 # ============================================================================
 x-db-credentials: &db_credentials
   # Shared via YAML anchor (not Compose variable interpolation) so the db
@@ -27,8 +16,6 @@ x-db-credentials: &db_credentials
   POSTGRES_DB: fleetview
   POSTGRES_USER: fleetview
   POSTGRES_PASSWORD: REPLACE_WITH_output_of_openssl_rand_hex_32
-
-x-dashboard-address: &dashboard_address "0.0.0.0:8080:8080"
 
 services:
   db:
@@ -92,12 +79,16 @@ services:
       exec ./fleetview-server
       '
     ports:
-      # DASHBOARD_ADDRESS, set at the top of this file. This is plain
-      # HTTP, not encrypted -- fine on a LAN you trust (see the README);
-      # for encryption instead, see the tls profile below, which uses its
-      # own separate FLEETVIEW_TLS_BIND_ADDRESS so turning TLS on never
-      # also widens this plaintext port.
-      - *dashboard_address
+      # No address given means every network interface this machine has
+      # (a normal Docker published port), so this is reachable from other
+      # devices on your network out of the box. This is plain HTTP, not
+      # encrypted -- fine on a LAN you trust (see the README); for
+      # encryption instead, see the tls profile below, which uses its own
+      # separate FLEETVIEW_TLS_BIND_ADDRESS so turning TLS on never also
+      # widens this plaintext port. To restrict this one instead, change
+      # it to "127.0.0.1:8080:8080" (only this machine) or
+      # "<LAN IP>:8080:8080" (just that one interface).
+      - "8080:8080"
     # Uses the image's own HEALTHCHECK (server/Dockerfile) rather than
     # redeclaring it here.
     networks:
@@ -140,13 +131,12 @@ services:
       - fleetview-caddy-data:/data
       - fleetview-caddy-config:/config
     ports:
-      # Deliberately its own variable, not DASHBOARD_ADDRESS (which
-      # controls the plain-HTTP server's port above): sharing one meant
-      # widening DASHBOARD_ADDRESS to reach Caddy from the LAN also
-      # widened the plaintext :8080 port to the LAN in the same step,
-      # defeating the point of turning TLS on. Defaults to 0.0.0.0 since
-      # enabling this profile is itself the deliberate choice to expose
-      # the dashboard beyond this machine -- encrypted, via Caddy only.
+      # Deliberately its own variable, not the server's plain-HTTP port
+      # above: so if you restrict that one back to 127.0.0.1 (e.g. because
+      # you only want the dashboard reachable over TLS), Caddy's port
+      # isn't restricted along with it. Defaults to 0.0.0.0 since enabling
+      # this profile is itself the deliberate choice to expose the
+      # dashboard beyond this machine -- encrypted, via Caddy only.
       - "${FLEETVIEW_TLS_BIND_ADDRESS:-0.0.0.0}:${FLEETVIEW_TLS_PORT:-8443}:8443"
     networks:
       frontend:

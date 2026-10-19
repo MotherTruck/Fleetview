@@ -73,10 +73,11 @@ To remove an agent later: `sudo fleetview-agent-uninstall` (Linux/OPNsense) or `
 
 ## Reaching it from other devices
 
-By default (`DASHBOARD_ADDRESS` at the top of `docker-compose.yml` is
-`"0.0.0.0:8080:8080"`), the dashboard already answers on every network
-interface this machine has — browse to `http://<this machine's LAN IP>:8080`
-from another device and it'll work with no changes. It's plain HTTP though:
+By default, the dashboard already answers on every network interface this
+machine has (the server service's published port in `docker-compose.yml`
+is `"8080:8080"`, same as a normal Docker port with no address given) —
+browse to `http://<this machine's LAN IP>:8080` from another device and
+it'll work with no changes. It's plain HTTP though:
 everything that crosses the network — your admin session cookie, every
 agent's credentials, the patch/command jobs you run, the inventory data
 agents report — can be read or tampered with in transit by anyone else on
@@ -98,10 +99,10 @@ for the full walkthrough, or the short version:
 4. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
    `https://...:8443` address, plus the fingerprint, when enrolling every agent.
 
-**To restrict it instead** (e.g. back to just this machine): near the top of
-`docker-compose.yml`, change `DASHBOARD_ADDRESS`'s `"0.0.0.0:8080:8080"` to
-`"127.0.0.1:8080:8080"` (or a specific LAN IP, to allow just that one
-interface), then `sudo docker compose up -d`.
+**To restrict it instead** (e.g. back to just this machine): in
+`docker-compose.yml`, under the `server` service's `ports:`, change
+`"8080:8080"` to `"127.0.0.1:8080:8080"` (or a specific LAN IP, to allow
+just that one interface), then `sudo docker compose up -d`.
 
 The agent itself still refuses to enroll against a plain `http://` URL that
 isn't loopback unless you also set `FLEETVIEW_ALLOW_PLAINTEXT=true` in its

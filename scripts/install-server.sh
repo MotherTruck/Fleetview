@@ -51,11 +51,22 @@ else
 fi
 
 admin_token="$(sed -n 's/^\s*ADMIN_TOKEN:\s*//p' docker-compose.yml | head -1)"
-# DASHBOARD_ADDRESS, near the top of docker-compose.yml (e.g.
-# "127.0.0.1:8080:8080") -- not a Compose variable, so .env can't override it.
-bind_address="$(sed -n 's/^x-dashboard-address: &dashboard_address "\([^:]*\):.*/\1/p' docker-compose.yml | head -1)"
-port="$(sed -n 's/^x-dashboard-address: &dashboard_address "[^:]*:\([^:]*\):8080"$/\1/p' docker-compose.yml | head -1)"
-bind_address="${bind_address:-127.0.0.1}"
+# Reads the server service's published port from docker-compose.yml --
+# not a Compose variable, so .env can't override it. Either "8080:8080"
+# (no address given, meaning every interface -- the default) or
+# "127.0.0.1:8080:8080" / "<LAN IP>:8080:8080" (restricted to one
+# interface). The line ending in '8080"' is unique to the server's port
+# -- caddy's ends in '8443"'.
+raw_dashboard_address="$(grep '8080"$' docker-compose.yml | sed -n 's/^\s*- "\(.*\)"$/\1/p' | head -1)"
+IFS=':' read -r -a dashboard_address_parts <<< "$raw_dashboard_address"
+if [[ ${#dashboard_address_parts[@]} -ge 3 ]]; then
+  bind_address="${dashboard_address_parts[0]}"
+  port="${dashboard_address_parts[1]}"
+else
+  bind_address="0.0.0.0"
+  port="${dashboard_address_parts[0]}"
+fi
+bind_address="${bind_address:-0.0.0.0}"
 port="${port:-8080}"
 
 echo "==> Pulling images"

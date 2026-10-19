@@ -8,16 +8,22 @@ set -uo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
-# Reads DASHBOARD_ADDRESS from near the top of docker-compose.yml (e.g.
-# "127.0.0.1:8080:8080") -- not a Compose variable, so .env can't override it.
-dashboard_address_field() {
-  [[ -f docker-compose.yml ]] || return 0
-  sed -n 's/^x-dashboard-address: &dashboard_address "\([^:]*\):\([^:]*\):8080"$/'"$1"'/p' docker-compose.yml | head -1
-}
-
-bind_address="$(dashboard_address_field '\1')"
-port="$(dashboard_address_field '\2')"
-bind_address="${bind_address:-127.0.0.1}"
+# Reads the server service's published port from docker-compose.yml --
+# not a Compose variable, so .env can't override it. Either "8080:8080"
+# (no address given, meaning every interface -- the default, like a
+# normal Docker published port) or "127.0.0.1:8080:8080" /
+# "<LAN IP>:8080:8080" (restricted to one interface). The line ending in
+# '8080"' is unique to the server's port -- caddy's ends in '8443"'.
+raw_dashboard_address="$(grep '8080"$' docker-compose.yml 2>/dev/null | sed -n 's/^\s*- "\(.*\)"$/\1/p' | head -1)"
+IFS=':' read -r -a dashboard_address_parts <<< "$raw_dashboard_address"
+if [[ ${#dashboard_address_parts[@]} -ge 3 ]]; then
+  bind_address="${dashboard_address_parts[0]}"
+  port="${dashboard_address_parts[1]}"
+else
+  bind_address="0.0.0.0"
+  port="${dashboard_address_parts[0]}"
+fi
+bind_address="${bind_address:-0.0.0.0}"
 port="${port:-8080}"
 
 section() { printf '\n== %s ==\n' "$1"; }
@@ -28,13 +34,13 @@ if [[ -f .env ]]; then
 else
   echo ".env not present -- fine, it's optional; POSTGRES_PASSWORD/ADMIN_TOKEN live in docker-compose.yml directly"
 fi
-echo "DASHBOARD_ADDRESS=$bind_address:$port:8080 (near the top of docker-compose.yml)"
+echo "Published port (server service in docker-compose.yml): $bind_address:$port:8080"
 case "$bind_address" in
   127.0.0.1|localhost)
     echo "-> Loopback only: the dashboard is reachable from THIS machine only."
-    echo "   To reach it from a VM host or another device, change DASHBOARD_ADDRESS near the"
-    echo "   top of docker-compose.yml to this machine's LAN/VM IP (or 0.0.0.0 on a trusted"
-    echo "   network) and re-run 'docker compose up -d'."
+    echo "   To reach it from a VM host or another device, change the server service's"
+    echo "   ports: line in docker-compose.yml to \"<LAN/VM IP>:8080:8080\" (or just"
+    echo "   \"8080:8080\" for every interface) and re-run 'docker compose up -d'."
     ;;
   0.0.0.0)
     echo "-> Published on all interfaces."
