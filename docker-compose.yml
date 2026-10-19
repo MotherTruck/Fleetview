@@ -78,7 +78,23 @@ services:
     depends_on:
       - server
     environment:
-      FLEETVIEW_TLS_HOSTNAME: ${FLEETVIEW_TLS_HOSTNAME:?Set FLEETVIEW_TLS_HOSTNAME in .env to use the tls profile — the LAN IP or hostname agents and browsers will connect to}
+      # Not ${FLEETVIEW_TLS_HOSTNAME:?...} (a hard requirement): Compose
+      # validates every service's required variables while parsing the
+      # whole file, before it knows which profiles are even active -- so a
+      # required var here broke `docker compose pull`/`up` for EVERY
+      # deployment, including ones that never touch --profile tls at all,
+      # until FLEETVIEW_TLS_HOSTNAME was set to something. Caddy itself
+      # (entrypoint below) is what actually enforces this, and only when
+      # the tls profile -- and so this container -- is running.
+      FLEETVIEW_TLS_HOSTNAME: ${FLEETVIEW_TLS_HOSTNAME:-}
+    entrypoint: >
+      sh -c '
+      if [ -z "$$FLEETVIEW_TLS_HOSTNAME" ]; then
+        echo "FLEETVIEW_TLS_HOSTNAME is not set -- set it in .env to the LAN IP or hostname agents and browsers will connect to, then restart (see docs/TLS.md)." >&2;
+        exit 1;
+      fi;
+      exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+      '
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - fleetview-caddy-data:/data
