@@ -54,12 +54,25 @@ FROM debian:bookworm-slim
 # whole database to a freshly-provisioned target server) -- the one thing
 # in this image that still needs apt-get, now that reqwest/sqlx's rustls
 # (bundled webpki-roots, see Cargo.lock) no longer needs ca-certificates
-# either. useradd is already part of this base image. HEALTHCHECK below
-# uses bash's builtin /dev/tcp instead of curl/wget -- one less thing to
-# install, and one less thing that can go stale.
+# at runtime. useradd is already part of this base image. HEALTHCHECK
+# below uses bash's builtin /dev/tcp instead of curl/wget -- one less
+# thing to install, and one less thing that can go stale.
+#
+# Debian bookworm's own repo only ships postgresql-client 15, but db
+# (docker-compose.yml) runs postgres:17 -- pg_dump refuses to dump from a
+# server newer than itself ("aborting because of server version
+# mismatch"), so this pulls postgresql-client-17 specifically from
+# PostgreSQL's own apt repo instead. curl/gnupg/ca-certificates are only
+# needed to add that repo at build time; purged again afterward.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client \
-    && rm -rf /var/lib/apt/lists/* \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/pgdg.list \
     && useradd --system --uid 10001 --create-home fleetview
 
 WORKDIR /app
