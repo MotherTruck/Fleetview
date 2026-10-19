@@ -10,9 +10,8 @@ umask 077
 
 project_dir="${1:-$(pwd)}"
 cd "$project_dir"
-test -f .env || { echo "No .env found in $project_dir -- this doesn't look like an existing FleetView install. Use scripts/install-server.sh for a fresh one." >&2; exit 1; }
 if [[ ! -f docker-compose.yml && ! -f compose.yml && ! -f compose.yaml && ! -f docker-compose.yaml ]]; then
-  echo "No Compose file found in $project_dir." >&2
+  echo "No Compose file found in $project_dir -- this doesn't look like an existing FleetView install. Use scripts/install-server.sh for a fresh one." >&2
   exit 1
 fi
 

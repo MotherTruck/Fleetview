@@ -47,8 +47,8 @@ LAN address — otherwise nothing outside the box itself can reach the
 dashboard or the API agents talk to. Beyond that, setup here is identical
 to every other distro: see **1. Run the server** in the main
 [README](../README.md), including the one-command installer
-(`scripts/install-server.sh`) that fetches `docker-compose.yml`, generates
-`.env` with fresh random secrets, and starts everything.
+(`scripts/install-server.sh`) that fetches `docker-compose.yml`, fills in
+fresh random secrets directly in it, and starts everything.
 
 ## Next steps
 

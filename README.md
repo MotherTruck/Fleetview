@@ -13,11 +13,11 @@ mkdir fleetview && cd fleetview
 curl -fsSL https://raw.githubusercontent.com/mothertruck/fleetview/main/scripts/install-server.sh | bash
 ```
 
-That's the whole install: it fetches `docker-compose.yml`, generates `.env`
-with fresh random secrets, pulls the image, starts it, and prints your
+That's the whole install: it fetches `docker-compose.yml`, fills in fresh
+random secrets directly in it, pulls the image, starts it, and prints your
 admin token and the dashboard URL when it's up. Safe to re-run later too —
-an existing `.env` is always left untouched, so re-running it just picks up
-the latest `docker-compose.yml`.
+an existing `docker-compose.yml` (and its secrets) is always left
+untouched.
 
 Only reachable from this machine by default. To reach it from other devices
 on your network, see **Reaching it from other devices** below.
@@ -29,14 +29,13 @@ your setup? Expand for the manual steps it automates.</summary>
 ```bash
 mkdir fleetview && cd fleetview
 curl -fsSLO https://raw.githubusercontent.com/mothertruck/fleetview/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/mothertruck/fleetview/main/.env.example
-cp .env.example .env
 ```
 
-Edit `.env` and set:
+Open `docker-compose.yml` and replace `POSTGRES_PASSWORD` and `ADMIN_TOKEN`
+near the top with your own values (the file tells you how):
 
 ```bash
-openssl rand -hex 32   # run twice -- one value for POSTGRES_PASSWORD, one for ADMIN_TOKEN
+openssl rand -hex 32   # run twice -- one value for each; the server refuses to start if either is left at its placeholder
 ```
 
 Then start it:
@@ -51,7 +50,7 @@ curl --fail http://127.0.0.1:8080/healthz
 
 ## 2. Sign in
 
-Open `http://127.0.0.1:8080` (or whatever address you bound it to). The first visit asks for the `ADMIN_TOKEN` from `.env`, once, to create your admin username and password. After that, sign in normally.
+Open `http://127.0.0.1:8080` (or whatever address you bound it to). The first visit asks for the `ADMIN_TOKEN` from `docker-compose.yml`, once, to create your admin username and password. After that, sign in normally.
 
 ## 3. Add a device
 
@@ -84,18 +83,22 @@ The install scripts require a pinned CA fingerprint for an `https://`
 server URL (not just trust-on-first-use) — see [`docs/TLS.md`](docs/TLS.md)
 for the full walkthrough, or the short version:
 
-1. In `.env`, set `FLEETVIEW_TLS_HOSTNAME` to this machine's LAN address or
-   hostname, and `FLEETVIEW_COOKIE_SECURE=true`.
+1. In `docker-compose.yml`, change `FLEETVIEW_TLS_HOSTNAME:-` to
+   `FLEETVIEW_TLS_HOSTNAME:-192.168.1.50` (your LAN address or hostname) and
+   `FLEETVIEW_COOKIE_SECURE:-false` to `FLEETVIEW_COOKIE_SECURE:-true` — or
+   set `FLEETVIEW_TLS_HOSTNAME=...` and `FLEETVIEW_COOKIE_SECURE=true` in a
+   `.env` file instead, if you'd rather leave `docker-compose.yml` untouched
+   for these. Either works.
 2. `sudo docker compose --profile tls up -d`
 3. Get the CA's fingerprint (`docs/TLS.md` step 2) — a couple of one-line commands.
 4. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
    `https://...:8443` address, plus the fingerprint, when enrolling every agent.
 
 **Plain HTTP instead, only if you understand the tradeoff** (e.g. a LAN you
-already fully trust and control): set `FLEETVIEW_BIND_ADDRESS` in `.env` to
-this machine's LAN address (or `0.0.0.0`) instead of touching the TLS
-settings above, then `sudo docker compose up -d` and point agents at that
-address. The agent itself still refuses to enroll against a plain
+already fully trust and control): in `docker-compose.yml`, change
+`FLEETVIEW_BIND_ADDRESS:-127.0.0.1` to this machine's LAN address (or
+`0.0.0.0`) instead of touching the TLS settings above, then
+`sudo docker compose up -d` and point agents at that address. The agent itself still refuses to enroll against a plain
 `http://` URL that isn't loopback unless you also set
 `FLEETVIEW_ALLOW_PLAINTEXT=true` in its config — a deliberate, explicit
 opt-in, not a silent default.

@@ -16,9 +16,18 @@ existing plain-HTTP installs are unaffected until you opt in.
 
 ## 1. Enable the profile
 
-In `.env`, set the LAN IP or hostname you actually connect with — Caddy
-issues its certificate for exactly this value, so it needs to match what's
-in your browser's address bar and each agent's `FLEETVIEW_SERVER_URL`:
+Set the LAN IP or hostname you actually connect with — Caddy issues its
+certificate for exactly this value, so it needs to match what's in your
+browser's address bar and each agent's `FLEETVIEW_SERVER_URL`. Either edit
+the defaults directly in `docker-compose.yml`:
+
+```
+FLEETVIEW_TLS_HOSTNAME:-192.168.1.50
+FLEETVIEW_COOKIE_SECURE:-true
+```
+
+or, if you'd rather leave `docker-compose.yml` untouched, put these in a
+`.env` file in the same directory instead (Compose reads it automatically):
 
 ```bash
 FLEETVIEW_TLS_HOSTNAME=192.168.1.50

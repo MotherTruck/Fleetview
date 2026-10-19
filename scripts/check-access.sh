@@ -14,8 +14,18 @@ env_value() {
   grep -E "^$1=" .env | tail -n1 | cut -d= -f2- | tr -d "\"'"
 }
 
+# Falls back to docker-compose.yml's own inline default (e.g.
+# ${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}) if .env doesn't override it --
+# POSTGRES_PASSWORD/ADMIN_TOKEN aside, .env is optional, not required.
+compose_default() {
+  [[ -f docker-compose.yml ]] || return 0
+  sed -n "s/.*$1:-\([^}]*\)}.*/\1/p" docker-compose.yml | head -1
+}
+
 bind_address="$(env_value FLEETVIEW_BIND_ADDRESS)"
 port="$(env_value FLEETVIEW_PORT)"
+bind_address="${bind_address:-$(compose_default FLEETVIEW_BIND_ADDRESS)}"
+port="${port:-$(compose_default FLEETVIEW_PORT)}"
 bind_address="${bind_address:-127.0.0.1}"
 port="${port:-8080}"
 
@@ -25,7 +35,7 @@ section "Configuration"
 if [[ -f .env ]]; then
   echo ".env found"
 else
-  echo ".env NOT found (docker compose will refuse to start without it)"
+  echo ".env not present -- fine, it's optional; POSTGRES_PASSWORD/ADMIN_TOKEN live in docker-compose.yml directly"
 fi
 echo "FLEETVIEW_BIND_ADDRESS=$bind_address"
 echo "FLEETVIEW_PORT=$port"

@@ -1,11 +1,25 @@
+# Before starting FleetView for the first time, replace POSTGRES_PASSWORD
+# and ADMIN_TOKEN below with your own random values -- generate each with:
+#   openssl rand -hex 32
+# (run it twice; use a different value for each). The server refuses to
+# start if either is left at its placeholder. Everything else in this file
+# has a working default and only needs editing if you want to change it
+# (e.g. to reach the dashboard from other devices -- see the README's
+# "Reaching it from other devices" section).
+x-db-credentials: &db_credentials
+  # Shared via YAML anchor (not Compose variable interpolation) so the db
+  # and server services can never disagree -- editing POSTGRES_PASSWORD
+  # here updates both at once.
+  POSTGRES_DB: fleetview
+  POSTGRES_USER: fleetview
+  POSTGRES_PASSWORD: REPLACE_WITH_output_of_openssl_rand_hex_32
+
 services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      <<: *db_credentials
     volumes:
       - fleetview-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -26,8 +40,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+      <<: *db_credentials
+      ADMIN_TOKEN: REPLACE_WITH_a_different_output_of_openssl_rand_hex_32
       # Optional legacy shared token. Leave unset to accept only one-time per-device tokens.
       ENROLLMENT_TOKEN: ${ENROLLMENT_TOKEN:-}
       METRICS_RETENTION_DAYS: "7"
@@ -50,6 +64,17 @@ services:
       # reachable from other containers on the internal frontend network,
       # never from outside.
       FORWARDED_ALLOW_IPS: "127.0.0.1,172.28.0.10"
+    entrypoint: >
+      sh -c '
+      case "$$POSTGRES_PASSWORD$$ADMIN_TOKEN" in
+        *REPLACE_WITH_*)
+          echo "POSTGRES_PASSWORD and/or ADMIN_TOKEN in docker-compose.yml are still the placeholder values -- replace both with the output of openssl rand -hex 32 (a different value for each), then restart." >&2;
+          exit 1
+          ;;
+      esac;
+      export DATABASE_URL="postgres://$$POSTGRES_USER:$$POSTGRES_PASSWORD@db:5432/$$POSTGRES_DB";
+      exec ./fleetview-server
+      '
     ports:
       # This is the plain-HTTP port. Widening FLEETVIEW_BIND_ADDRESS
       # beyond loopback publishes it to the LAN unencrypted -- fine only
@@ -90,7 +115,7 @@ services:
     entrypoint: >
       sh -c '
       if [ -z "$$FLEETVIEW_TLS_HOSTNAME" ]; then
-        echo "FLEETVIEW_TLS_HOSTNAME is not set -- set it in .env to the LAN IP or hostname agents and browsers will connect to, then restart (see docs/TLS.md)." >&2;
+        echo "FLEETVIEW_TLS_HOSTNAME is not set -- set it in docker-compose.yml (or .env) to the LAN IP or hostname agents and browsers will connect to, then restart (see docs/TLS.md)." >&2;
         exit 1;
       fi;
       exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile

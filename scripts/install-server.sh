@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Installs (or updates) the FleetView server stack in the current
-# directory: fetches docker-compose.yml, generates a fresh .env with
-# random secrets on first run only, then pulls and starts it. One
-# command, no git clone or source checkout needed.
+# directory: fetches docker-compose.yml (first run only), fills in fresh
+# random secrets directly in it, then pulls and starts it. One command,
+# no git clone, source checkout, or separate .env file needed.
 #
-# Safe to re-run later to pick up a newer docker-compose.yml: an existing
-# .env is always left untouched, so your secrets, bind address, and any
-# other setting you've customized survive a re-run.
+# Safe to re-run later: an existing docker-compose.yml is always left
+# untouched (your secrets and any setting you've edited live in it), so
+# re-running just re-pulls and restarts against whatever's already there.
+# To pick up a newer docker-compose.yml from upstream later, fetch it
+# fresh yourself and reapply your edits.
 set -euo pipefail
 umask 077
 
@@ -27,31 +29,38 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Fetching docker-compose.yml"
-curl -fsSL "$REPO_RAW/docker-compose.yml" -o docker-compose.yml.new
-mv docker-compose.yml.new docker-compose.yml
-
-if [[ -f .env ]]; then
-  echo "==> .env already exists -- leaving it untouched"
+if [[ -f docker-compose.yml ]]; then
+  echo "==> docker-compose.yml already exists -- leaving it untouched"
 else
-  echo "==> Generating .env with fresh random secrets"
-  curl -fsSL "$REPO_RAW/.env.example" -o .env
-  chmod 600 .env
-  postgres_password="$(openssl rand -hex 32)"
-  admin_token="$(openssl rand -hex 32)"
-  # Hex output only (0-9a-f), so neither value can contain a character
-  # that would need escaping as a sed replacement.
-  sed -i \
-    -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$postgres_password/" \
-    -e "s/^ADMIN_TOKEN=.*/ADMIN_TOKEN=$admin_token/" \
-    .env
+  echo "==> Fetching docker-compose.yml"
+  curl -fsSL "$REPO_RAW/docker-compose.yml" -o docker-compose.yml.new
+  mv docker-compose.yml.new docker-compose.yml
 fi
 
-admin_token="$(sed -n 's/^ADMIN_TOKEN=//p' .env | head -1)"
-bind_address="$(sed -n 's/^FLEETVIEW_BIND_ADDRESS=//p' .env | head -1)"
-bind_address="${bind_address:-127.0.0.1}"
-port="$(sed -n 's/^FLEETVIEW_PORT=//p' .env | head -1)"
-port="${port:-8080}"
+if grep -qE 'REPLACE_WITH_(output_of_openssl_rand_hex_32|a_different_output_of_openssl_rand_hex_32)$' docker-compose.yml; then
+  echo "==> Filling in fresh random secrets"
+  # Hex output only (0-9a-f), so neither value can contain a character
+  # that would need escaping as a sed replacement, and neither can ever
+  # collide with the REPLACE_WITH_ prefix the placeholders use.
+  sed -i \
+    -e "s/REPLACE_WITH_output_of_openssl_rand_hex_32/$(openssl rand -hex 32)/" \
+    -e "s/REPLACE_WITH_a_different_output_of_openssl_rand_hex_32/$(openssl rand -hex 32)/" \
+    docker-compose.yml
+else
+  echo "==> docker-compose.yml already has its secrets filled in -- leaving them untouched"
+fi
+
+admin_token="$(sed -n 's/^\s*ADMIN_TOKEN:\s*//p' docker-compose.yml | head -1)"
+# Both default to 127.0.0.1:8080 in docker-compose.yml itself; .env only
+# needs to exist if you've overridden them there (see .env.example).
+bind_address="127.0.0.1"
+port="8080"
+if [[ -f .env ]]; then
+  bind_address="$(sed -n 's/^FLEETVIEW_BIND_ADDRESS=//p' .env | tail -1)"
+  port_override="$(sed -n 's/^FLEETVIEW_PORT=//p' .env | tail -1)"
+  bind_address="${bind_address:-127.0.0.1}"
+  port="${port_override:-8080}"
+fi
 
 echo "==> Pulling images"
 docker compose pull
@@ -80,7 +89,8 @@ FleetView is running.
   Dashboard:    http://$bind_address:$port
   Admin token:  $admin_token
                 (you'll be asked for this once, to create your admin login
-                -- also saved in .env as ADMIN_TOKEN if you need it again)
+                -- also saved as ADMIN_TOKEN in docker-compose.yml if you
+                need it again)
 
 Only reachable from this machine right now ($bind_address). To reach it
 from other devices, see "Reaching it from other devices" in README.md --
