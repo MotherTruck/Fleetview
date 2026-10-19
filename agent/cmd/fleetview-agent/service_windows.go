@@ -177,6 +177,9 @@ func installService(configPath string) error {
 		return fmt.Errorf("create service: %w", err)
 	}
 	defer service.Close()
+	if err := configureRecoveryActions(service); err != nil {
+		return fmt.Errorf("service installed but failed to configure restart-on-failure: %w", err)
+	}
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("service installed but failed to start: %w", err)
 	}
@@ -259,7 +262,42 @@ func startService() error {
 		return fmt.Errorf("open service %q: %w", serviceName, err)
 	}
 	defer service.Close()
+	// Idempotent, and cheap enough to just always re-apply here: this is
+	// also how an agent installed before configureRecoveryActions existed
+	// (so its already-registered service has no restart-on-failure policy
+	// at all) ends up with one -- the next UPGRADE_AGENT's finishUpgrade
+	// calls this same startService after swapping the binary, self-healing
+	// existing fleets without requiring a full uninstall/reinstall.
+	if err := configureRecoveryActions(service); err != nil {
+		return fmt.Errorf("failed to configure restart-on-failure: %w", err)
+	}
 	return service.Start()
+}
+
+// configureRecoveryActions tells the service control manager to restart
+// this service automatically when its process exits unexpectedly --
+// unlike systemd/rc.d (which restart on failure by default, relied on by
+// MIGRATE_SERVER and UPGRADE_AGENT's os.Exit(1)-then-get-restarted pattern,
+// see handleNextJob in main.go), Windows does nothing on its own: a
+// service whose process exits is simply left Stopped until something else
+// starts it again. Without this, a MIGRATE_SERVER job would exit the
+// process to pick up the new server URL and never come back, leaving the
+// agent offline on both the old and new server.
+func configureRecoveryActions(service *mgr.Service) error {
+	recoveryActions := []mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+	}
+	if err := service.SetRecoveryActions(recoveryActions, uint32((24 * time.Hour).Seconds())); err != nil {
+		return err
+	}
+	// A MIGRATE_SERVER/UPGRADE_AGENT os.Exit(1) never reports SERVICE_STOPPED
+	// to the SCM first, so it already counts as a "crash" and would trigger
+	// the recovery actions above without this -- but setting it explicitly
+	// means any future clean-exit-with-nonzero-code path is covered too,
+	// not just ones that happen to look like a crash to the SCM.
+	return service.SetRecoveryActionsOnNonCrashFailures(true)
 }
 
 func stopService() error {
