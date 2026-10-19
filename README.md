@@ -10,6 +10,24 @@ On the machine that will host FleetView, with [Docker](https://docs.docker.com/e
 
 ```bash
 mkdir fleetview && cd fleetview
+curl -fsSL https://raw.githubusercontent.com/mothertruck/fleetview/main/scripts/install-server.sh | bash
+```
+
+That's the whole install: it fetches `docker-compose.yml`, generates `.env`
+with fresh random secrets, pulls the image, starts it, and prints your
+admin token and the dashboard URL when it's up. Safe to re-run later too —
+an existing `.env` is always left untouched, so re-running it just picks up
+the latest `docker-compose.yml`.
+
+Only reachable from this machine by default. To reach it from other devices
+on your network, see **Reaching it from other devices** below.
+
+<details>
+<summary>Prefer to see exactly what's happening, or the script doesn't fit
+your setup? Expand for the manual steps it automates.</summary>
+
+```bash
+mkdir fleetview && cd fleetview
 curl -fsSLO https://raw.githubusercontent.com/mothertruck/fleetview/main/docker-compose.yml
 curl -fsSLO https://raw.githubusercontent.com/mothertruck/fleetview/main/.env.example
 cp .env.example .env
@@ -29,7 +47,7 @@ docker compose up -d
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
-Leave `FLEETVIEW_BIND_ADDRESS=127.0.0.1` if only this machine needs the dashboard. To reach it from other devices on your network, see **Reaching it from other devices** below.
+</details>
 
 ## 2. Sign in
 
@@ -92,6 +110,8 @@ docker compose restart server           # restart the server
 docker compose down                     # stop the server (keeps your data)
 docker compose pull && docker compose up -d   # update to the latest published version
 ```
+
+Or `scripts/upgrade-server-in-place.sh` to do the same pull-and-recreate with a database backup taken first.
 
 ```bash
 sudo journalctl -u fleetview-agent -f        # agent logs (Linux)

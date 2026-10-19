@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
-# Only upgrades the management server. Keeps the existing Compose project,
-# .env, database volume, and native agent service/credentials untouched.
+# Upgrades an existing FleetView server to the latest published image.
+# Since the Rust cutover (server-rs/), the server ships as a published
+# image (ghcr.io/mothertruck/fleetview-server) rather than something built
+# from a local source checkout, so upgrading is just pulling the newer
+# image and recreating the container -- no git clone, no local build, no
+# source tree to keep in sync with the running deployment at all.
 set -euo pipefail
 umask 077
-project_dir="${1:-/containers/fleetview}"
-release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+project_dir="${1:-$(pwd)}"
 cd "$project_dir"
-test -f .env || { echo "Existing .env not found; refusing a new installation." >&2; exit 1; }
+test -f .env || { echo "No .env found in $project_dir -- this doesn't look like an existing FleetView install. Use scripts/install-server.sh for a fresh one." >&2; exit 1; }
 if [[ ! -f docker-compose.yml && ! -f compose.yml && ! -f compose.yaml && ! -f docker-compose.yaml ]]; then
-  echo "Existing Compose file not found." >&2; exit 1
+  echo "No Compose file found in $project_dir." >&2
+  exit 1
 fi
-test -f "$release_root/server/app/accounts.py"
-if [[ "$(pwd -P)" == "$release_root" ]]; then
-  echo "Extract the release into a separate directory before running this script." >&2; exit 1
-fi
+
 backup_dir="$HOME/fleetview-server-backup-$(date +%Y%m%d-%H%M%S)"
 mkdir -m700 "$backup_dir"
 sudo docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$backup_dir/database.sql"
 test -s "$backup_dir/database.sql"
-sudo tar --exclude=./.git --exclude=./agent/bin --exclude=./backups -czf "$backup_dir/source-and-config.tar.gz" .
-sudo cp -a "$release_root/server" "$release_root/agent" "$release_root/scripts" "$release_root/docs" .
-sudo docker compose build server
+echo "Database backed up to $backup_dir/database.sql"
+
+sudo docker compose pull server
 sudo docker compose up -d --no-deps server
 sudo docker compose ps
 sudo docker compose logs --tail=30 server
-printf "Backup: %s\nExisting Compose configuration and native agents were preserved.\n" "$backup_dir"
+
+echo "Upgrade complete. Database backup: $backup_dir/database.sql"
