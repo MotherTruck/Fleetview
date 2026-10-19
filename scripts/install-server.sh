@@ -51,16 +51,12 @@ else
 fi
 
 admin_token="$(sed -n 's/^\s*ADMIN_TOKEN:\s*//p' docker-compose.yml | head -1)"
-# Both default to 127.0.0.1:8080 in docker-compose.yml itself; .env only
-# needs to exist if you've overridden them there (see .env.example).
-bind_address="127.0.0.1"
-port="8080"
-if [[ -f .env ]]; then
-  bind_address="$(sed -n 's/^FLEETVIEW_BIND_ADDRESS=//p' .env | tail -1)"
-  port_override="$(sed -n 's/^FLEETVIEW_PORT=//p' .env | tail -1)"
-  bind_address="${bind_address:-127.0.0.1}"
-  port="${port_override:-8080}"
-fi
+# DASHBOARD_ADDRESS, near the top of docker-compose.yml (e.g.
+# "127.0.0.1:8080:8080") -- not a Compose variable, so .env can't override it.
+bind_address="$(sed -n 's/^x-dashboard-address: &dashboard_address "\([^:]*\):.*/\1/p' docker-compose.yml | head -1)"
+port="$(sed -n 's/^x-dashboard-address: &dashboard_address "[^:]*:\([^:]*\):8080"$/\1/p' docker-compose.yml | head -1)"
+bind_address="${bind_address:-127.0.0.1}"
+port="${port:-8080}"
 
 echo "==> Pulling images"
 docker compose pull

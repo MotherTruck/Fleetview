@@ -42,8 +42,8 @@ mid-session).
 
 This machine is a dedicated server reached from other machines on your
 network, not a same-box test, so plan to either use the TLS profile (see
-[`docs/TLS.md`](TLS.md)) or set `FLEETVIEW_BIND_ADDRESS` to this machine's
-LAN address — otherwise nothing outside the box itself can reach the
+[`docs/TLS.md`](TLS.md)) or set `DASHBOARD_ADDRESS` (near the top of
+`docker-compose.yml`) to this machine's LAN address — otherwise nothing outside the box itself can reach the
 dashboard or the API agents talk to. Beyond that, setup here is identical
 to every other distro: see **1. Run the server** in the main
 [README](../README.md), including the one-command installer

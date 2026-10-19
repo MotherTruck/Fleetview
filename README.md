@@ -95,10 +95,11 @@ for the full walkthrough, or the short version:
    `https://...:8443` address, plus the fingerprint, when enrolling every agent.
 
 **Plain HTTP instead, only if you understand the tradeoff** (e.g. a LAN you
-already fully trust and control): in `docker-compose.yml`, change
-`FLEETVIEW_BIND_ADDRESS:-127.0.0.1` to this machine's LAN address (or
-`0.0.0.0`) instead of touching the TLS settings above, then
-`sudo docker compose up -d` and point agents at that address. The agent itself still refuses to enroll against a plain
+already fully trust and control): near the top of `docker-compose.yml`,
+change `DASHBOARD_ADDRESS`'s `"127.0.0.1:8080:8080"` to this machine's LAN
+address (or `0.0.0.0`) instead of touching the TLS settings above, e.g.
+`"0.0.0.0:8080:8080"`, then `sudo docker compose up -d` and point agents at
+that address. The agent itself still refuses to enroll against a plain
 `http://` URL that isn't loopback unless you also set
 `FLEETVIEW_ALLOW_PLAINTEXT=true` in its config — a deliberate, explicit
 opt-in, not a silent default.

@@ -8,24 +8,15 @@ set -uo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
-# Read a single non-secret key from .env without sourcing the file.
-env_value() {
-  [[ -f .env ]] || return 0
-  grep -E "^$1=" .env | tail -n1 | cut -d= -f2- | tr -d "\"'"
-}
-
-# Falls back to docker-compose.yml's own inline default (e.g.
-# ${FLEETVIEW_BIND_ADDRESS:-127.0.0.1}) if .env doesn't override it --
-# POSTGRES_PASSWORD/ADMIN_TOKEN aside, .env is optional, not required.
-compose_default() {
+# Reads DASHBOARD_ADDRESS from near the top of docker-compose.yml (e.g.
+# "127.0.0.1:8080:8080") -- not a Compose variable, so .env can't override it.
+dashboard_address_field() {
   [[ -f docker-compose.yml ]] || return 0
-  sed -n "s/.*$1:-\([^}]*\)}.*/\1/p" docker-compose.yml | head -1
+  sed -n 's/^x-dashboard-address: &dashboard_address "\([^:]*\):\([^:]*\):8080"$/'"$1"'/p' docker-compose.yml | head -1
 }
 
-bind_address="$(env_value FLEETVIEW_BIND_ADDRESS)"
-port="$(env_value FLEETVIEW_PORT)"
-bind_address="${bind_address:-$(compose_default FLEETVIEW_BIND_ADDRESS)}"
-port="${port:-$(compose_default FLEETVIEW_PORT)}"
+bind_address="$(dashboard_address_field '\1')"
+port="$(dashboard_address_field '\2')"
 bind_address="${bind_address:-127.0.0.1}"
 port="${port:-8080}"
 
@@ -37,13 +28,13 @@ if [[ -f .env ]]; then
 else
   echo ".env not present -- fine, it's optional; POSTGRES_PASSWORD/ADMIN_TOKEN live in docker-compose.yml directly"
 fi
-echo "FLEETVIEW_BIND_ADDRESS=$bind_address"
-echo "FLEETVIEW_PORT=$port"
+echo "DASHBOARD_ADDRESS=$bind_address:$port:8080 (near the top of docker-compose.yml)"
 case "$bind_address" in
   127.0.0.1|localhost)
     echo "-> Loopback only: the dashboard is reachable from THIS machine only."
-    echo "   To reach it from a VM host or another device, set FLEETVIEW_BIND_ADDRESS to this"
-    echo "   machine's LAN/VM IP (or 0.0.0.0 on a trusted network) and re-run 'docker compose up -d'."
+    echo "   To reach it from a VM host or another device, change DASHBOARD_ADDRESS near the"
+    echo "   top of docker-compose.yml to this machine's LAN/VM IP (or 0.0.0.0 on a trusted"
+    echo "   network) and re-run 'docker compose up -d'."
     ;;
   0.0.0.0)
     echo "-> Published on all interfaces."
