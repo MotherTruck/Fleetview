@@ -237,5 +237,21 @@ async fn receive(
         ));
     }
 
+    // pg_restore ran as a separate process/connection and dropped+recreated
+    // every table, so this server's own connection pool (state.db) is left
+    // holding server-side prepared statements against now-gone table OIDs --
+    // any pooled connection reused after this point fails every query with
+    // "cached plan must not change result type". Exiting lets the
+    // `restart: unless-stopped` policy (docker-compose.yml) bring the
+    // process back up with a fresh pool against the just-restored database,
+    // rather than trying to surgically invalidate sqlx's per-connection
+    // statement cache. The response below is flushed to the caller first
+    // (a short delay, not immediately) so this server's own success
+    // confirmation actually reaches the old server before the process dies.
+    tokio::spawn(async {
+        tokio::time::sleep(StdDuration::from_millis(500)).await;
+        std::process::exit(0);
+    });
+
     Ok(Json(json!({ "status": "restored" })))
 }
