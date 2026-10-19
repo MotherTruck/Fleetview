@@ -41,10 +41,10 @@ mid-session).
 ## 2. Install FleetView
 
 This machine is a dedicated server reached from other machines on your
-network, not a same-box test, so plan to either use the TLS profile (see
-[`docs/TLS.md`](TLS.md)) or set `DASHBOARD_ADDRESS` (near the top of
-`docker-compose.yml`) to this machine's LAN address — otherwise nothing outside the box itself can reach the
-dashboard or the API agents talk to. Beyond that, setup here is identical
+network, not a same-box test. `docker-compose.yml` already reaches other
+devices on your network out of the box (over plain HTTP); for an encrypted
+option instead, use the TLS profile (see [`docs/TLS.md`](TLS.md)). Beyond
+that, setup here is identical
 to every other distro: see **1. Run the server** in the main
 [README](../README.md), including the one-command installer
 (`scripts/install-server.sh`) that fetches `docker-compose.yml`, fills in

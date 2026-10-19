@@ -78,18 +78,26 @@ if [[ "$up" != true ]]; then
   exit 1
 fi
 
+browse_address="$bind_address"
+reachability="Only reachable from this machine right now ($bind_address)."
+if [[ "$bind_address" == "0.0.0.0" ]]; then
+  browse_address="127.0.0.1"
+  lan_address="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  reachability="Reachable from this machine and other devices on your network${lan_address:+ (e.g. http://$lan_address:$port)} -- this is plain HTTP, not encrypted."
+fi
+
 cat <<EOF
 
 FleetView is running.
 
-  Dashboard:    http://$bind_address:$port
+  Dashboard:    http://$browse_address:$port
   Admin token:  $admin_token
                 (you'll be asked for this once, to create your admin login
                 -- also saved as ADMIN_TOKEN in docker-compose.yml if you
                 need it again)
 
-Only reachable from this machine right now ($bind_address). To reach it
-from other devices, see "Reaching it from other devices" in README.md --
+$reachability To change who can reach it,
+see "Reaching it from other devices" in README.md --
 TLS is the recommended path (one extra command), kept out of this
 installer since it needs you to choose the LAN address or hostname
 yourself first.

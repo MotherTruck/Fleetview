@@ -8,10 +8,14 @@
 #    start if either is left at its placeholder.
 #
 # 2. DASHBOARD_ADDRESS, right under that, controls who can reach the
-#    dashboard. Change it to reach the dashboard from other devices --
-#    see "Reaching it from other devices" in README.md.
-#      "127.0.0.1:8080:8080"    -> only this machine (default, safest)
-#      "0.0.0.0:8080:8080"      -> every network interface this machine has
+#    dashboard -- defaults to every network interface this machine has
+#    (like most Docker containers' published ports), so it's reachable
+#    from other devices on your network out of the box. This is plain
+#    HTTP, not encrypted -- fine on a LAN you trust; see "Reaching it
+#    from other devices" in README.md for an encrypted option, or to
+#    restrict it instead:
+#      "0.0.0.0:8080:8080"      -> every interface (default)
+#      "127.0.0.1:8080:8080"    -> only this machine
 #      "192.168.1.50:8080:8080" -> just that one interface
 #
 # Everything else in this file has a working default.
@@ -24,7 +28,7 @@ x-db-credentials: &db_credentials
   POSTGRES_USER: fleetview
   POSTGRES_PASSWORD: REPLACE_WITH_output_of_openssl_rand_hex_32
 
-x-dashboard-address: &dashboard_address "127.0.0.1:8080:8080"
+x-dashboard-address: &dashboard_address "0.0.0.0:8080:8080"
 
 services:
   db:
@@ -88,13 +92,11 @@ services:
       exec ./fleetview-server
       '
     ports:
-      # DASHBOARD_ADDRESS, set at the top of this file. This is the
-      # plain-HTTP port -- widening it beyond 127.0.0.1 publishes it to
-      # the LAN unencrypted, fine only for a LAN you fully trust (see the
-      # README). The recommended path for reaching this from elsewhere is
-      # the tls profile below instead, which uses its own separate
-      # FLEETVIEW_TLS_BIND_ADDRESS so turning TLS on never also widens
-      # this plaintext port.
+      # DASHBOARD_ADDRESS, set at the top of this file. This is plain
+      # HTTP, not encrypted -- fine on a LAN you trust (see the README);
+      # for encryption instead, see the tls profile below, which uses its
+      # own separate FLEETVIEW_TLS_BIND_ADDRESS so turning TLS on never
+      # also widens this plaintext port.
       - *dashboard_address
     # Uses the image's own HEALTHCHECK (server/Dockerfile) rather than
     # redeclaring it here.

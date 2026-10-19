@@ -19,8 +19,9 @@ admin token and the dashboard URL when it's up. Safe to re-run later too —
 an existing `docker-compose.yml` (and its secrets) is always left
 untouched.
 
-Only reachable from this machine by default. To reach it from other devices
-on your network, see **Reaching it from other devices** below.
+Reachable from other devices on your network by default (plain HTTP, not
+encrypted — see **Reaching it from other devices** below for an encrypted
+option, or to restrict it to just this machine instead).
 
 <details>
 <summary>Prefer to see exactly what's happening, or the script doesn't fit
@@ -72,13 +73,16 @@ To remove an agent later: `sudo fleetview-agent-uninstall` (Linux/OPNsense) or `
 
 ## Reaching it from other devices
 
-`127.0.0.1` only works from the same machine. Once you open the dashboard to
-the rest of your network, everything that crosses it — your admin session
-cookie, every agent's credentials, the patch/command jobs you run, the
-inventory data agents report — is worth protecting, because anyone else on
-that network can otherwise read or tamper with it in transit.
+By default (`DASHBOARD_ADDRESS` at the top of `docker-compose.yml` is
+`"0.0.0.0:8080:8080"`), the dashboard already answers on every network
+interface this machine has — browse to `http://<this machine's LAN IP>:8080`
+from another device and it'll work with no changes. It's plain HTTP though:
+everything that crosses the network — your admin session cookie, every
+agent's credentials, the patch/command jobs you run, the inventory data
+agents report — can be read or tampered with in transit by anyone else on
+that network. Fine on a LAN you fully trust; worth encrypting otherwise.
 
-**Recommended: enable TLS first, then point agents at the HTTPS address.**
+**To encrypt it: enable TLS, then point agents at the HTTPS address.**
 The install scripts require a pinned CA fingerprint for an `https://`
 server URL (not just trust-on-first-use) — see [`docs/TLS.md`](docs/TLS.md)
 for the full walkthrough, or the short version:
@@ -94,15 +98,14 @@ for the full walkthrough, or the short version:
 4. Open `https://<FLEETVIEW_TLS_HOSTNAME>:8443` and use that same
    `https://...:8443` address, plus the fingerprint, when enrolling every agent.
 
-**Plain HTTP instead, only if you understand the tradeoff** (e.g. a LAN you
-already fully trust and control): near the top of `docker-compose.yml`,
-change `DASHBOARD_ADDRESS`'s `"127.0.0.1:8080:8080"` to this machine's LAN
-address (or `0.0.0.0`) instead of touching the TLS settings above, e.g.
-`"0.0.0.0:8080:8080"`, then `sudo docker compose up -d` and point agents at
-that address. The agent itself still refuses to enroll against a plain
-`http://` URL that isn't loopback unless you also set
-`FLEETVIEW_ALLOW_PLAINTEXT=true` in its config — a deliberate, explicit
-opt-in, not a silent default.
+**To restrict it instead** (e.g. back to just this machine): near the top of
+`docker-compose.yml`, change `DASHBOARD_ADDRESS`'s `"0.0.0.0:8080:8080"` to
+`"127.0.0.1:8080:8080"` (or a specific LAN IP, to allow just that one
+interface), then `sudo docker compose up -d`.
+
+The agent itself still refuses to enroll against a plain `http://` URL that
+isn't loopback unless you also set `FLEETVIEW_ALLOW_PLAINTEXT=true` in its
+config — a deliberate, explicit opt-in, not a silent default.
 
 Either way, never expose the server directly to the internet without HTTPS in front of it.
 
