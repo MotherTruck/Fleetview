@@ -90,12 +90,19 @@ if [[ "$up" != true ]]; then
 fi
 
 browse_address="$bind_address"
-reachability="Only reachable from this machine right now ($bind_address)."
-if [[ "$bind_address" == "0.0.0.0" ]]; then
-  browse_address="127.0.0.1"
-  lan_address="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  reachability="Reachable from this machine and other devices on your network${lan_address:+ (e.g. http://$lan_address:$port)} -- this is plain HTTP, not encrypted."
-fi
+case "$bind_address" in
+  127.0.0.1|localhost)
+    reachability="Only reachable from this machine right now ($bind_address)."
+    ;;
+  0.0.0.0)
+    browse_address="127.0.0.1"
+    lan_address="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    reachability="Reachable from this machine and other devices on your network${lan_address:+ (e.g. http://$lan_address:$port)} -- this is plain HTTP, not encrypted."
+    ;;
+  *)
+    reachability="Reachable from this machine and other devices on your network via $bind_address -- this is plain HTTP, not encrypted."
+    ;;
+esac
 
 cat <<EOF
 
