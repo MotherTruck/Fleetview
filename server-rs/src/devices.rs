@@ -4,7 +4,7 @@
 //! endpoints. Reports history, package catalog, and the install/* static
 //! endpoints land in a later increment (they depend on deployment.py's
 //! published_agent_manifest, ported alongside the rest of that file).
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
@@ -25,8 +25,24 @@ use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/api/v1/agent/report", post(report))
-        .route("/api/v1/agent/vulnerabilities", post(report_vulnerabilities))
+        // Both carry a per-device JSON inventory/vulnerability report that
+        // can legitimately run past main.rs's tightened 32MB global default
+        // on a host with a lot of installed packages (each vulnerability
+        // report entry includes a title, URL, and a references list) --
+        // confirmed in practice as a 413 rejecting real scan uploads.
+        // Generous rather than disabled outright, same reasoning as
+        // migration.rs's /receive: authentication happens inside the
+        // handler, after axum has already buffered the body, so an
+        // unbounded limit here would let an unauthenticated request
+        // exhaust memory before that check ever runs.
+        .route(
+            "/api/v1/agent/report",
+            post(report).route_layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/agent/vulnerabilities",
+            post(report_vulnerabilities).route_layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/api/v1/agent/metrics", post(report_metrics))
         .route("/api/v1/agent/heartbeat", post(heartbeat))
         .route("/api/v1/agent/settings", get(get_agent_settings))
