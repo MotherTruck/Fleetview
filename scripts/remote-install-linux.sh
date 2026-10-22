@@ -6,7 +6,8 @@ enrollment_token="${2:-}"
 expected_ca_fingerprint="${3:-}"
 if [[ -z "$server_url" || -z "$enrollment_token" ]]; then
   echo "Usage: install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN CA_SHA256_FINGERPRINT" >&2
-  echo "       install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN --insecure-tofu   (skip pinning -- not recommended)" >&2
+  echo "       install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN --insecure-tofu       (https://, skip pinning -- not recommended)" >&2
+  echo "       install-fleetview-agent.sh SERVER_URL ENROLLMENT_TOKEN --allow-plaintext      (http:// to a non-local address -- not recommended)" >&2
   exit 2
 fi
 # A pinned fingerprint is required for an https:// server -- trust-on-
@@ -21,6 +22,29 @@ if [[ "$server_url" == https://* && -z "$expected_ca_fingerprint" ]]; then
 fi
 if [[ "$expected_ca_fingerprint" == "--insecure-tofu" ]]; then
   expected_ca_fingerprint=""
+fi
+# Mirrors config.Load's own refusal (agent/internal/config/config.go) --
+# catching it here too means a bad SERVER_URL fails install immediately
+# with a clear message, instead of installing successfully and only then
+# crash-looping once systemd starts the service and the agent itself
+# refuses to run. http://<loopback> is exempt, same as the agent's check.
+allow_plaintext=false
+if [[ "$server_url" == http://* ]]; then
+  plaintext_host="${server_url#http://}"
+  plaintext_host="${plaintext_host%%/*}"
+  plaintext_host="${plaintext_host%%:*}"
+  case "$plaintext_host" in
+    127.0.0.1|localhost|::1|\[::1\]) : ;; # loopback, no opt-in needed
+    *)
+      if [[ "$expected_ca_fingerprint" == "--allow-plaintext" ]]; then
+        allow_plaintext=true
+        expected_ca_fingerprint=""
+      else
+        echo "SERVER_URL ($server_url) is plain HTTP to a non-local address -- this would send the agent's credentials and every job result in clear text. Use an https:// URL instead (see docs/TLS.md), or pass --allow-plaintext to proceed anyway if you understand the risk." >&2
+        exit 2
+      fi
+      ;;
+  esac
 fi
 # Normalize to bare uppercase hex (strip colons/spaces) so it matches
 # regardless of how the admin copied it -- openssl prints it
@@ -126,6 +150,9 @@ trap 'rm -rf "$temporary_directory"; rm -f "$config_file"' EXIT
   printf 'FLEETVIEW_ALLOW_INSECURE_TLS=false\n'
   if [[ -n "$ca_file" ]]; then
     printf 'FLEETVIEW_CA_FILE=%s\n' "$ca_file"
+  fi
+  if [[ "$allow_plaintext" == true ]]; then
+    printf 'FLEETVIEW_ALLOW_PLAINTEXT=true\n'
   fi
 } > "$config_file"
 install -m600 "$config_file" /etc/fleetview-agent/agent.env

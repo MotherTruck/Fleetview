@@ -989,6 +989,15 @@ function renderInstallCommand() {
   // bootstrap, see docs/TLS.md) -- stray colons/whitespace from however the
   // admin copied it are harmless, both installers normalize it the same way.
   const caFingerprint = isHttps ? $("#installCaFingerprint").value.trim() : "";
+  // Mirrors config.Load's own refusal (agent/internal/config/config.go):
+  // without an explicit opt-in, the agent refuses to start against a
+  // plain-HTTP, non-local server at all. Rather than send an admin a
+  // command that installs successfully and then crash-loops, the opt-in
+  // flag is included here automatically -- same spirit as PLAINTEXT
+  // requiring FLEETVIEW_ALLOW_PLAINTEXT, just surfaced where the command
+  // is actually generated instead of only as a runtime failure.
+  const isHttpNonLoopback = /^http:\/\//i.test(serverURL)
+    && !/^http:\/\/(127\.0\.0\.1|localhost|\[?::1\]?)(:|\/|$)/i.test(serverURL);
 
   if (windows) {
     const meta = $("#windowsInstallTokenMeta");
@@ -1014,14 +1023,24 @@ function renderInstallCommand() {
       $("#windowsInstallCommand").textContent =
         `$ps1 = "$env:TEMP\\install-fleetview-agent.ps1"; Invoke-WebRequest -Uri ${psQuote(installerURL)} -OutFile $ps1 -UseBasicParsing; `
         + `& $ps1 -ServerUrl ${psQuote(serverURL)} -EnrollmentToken ${psQuote(fresh.token)}`
-        + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "");
+        + (caFingerprint ? ` -CaFingerprint ${psQuote(caFingerprint)}` : "")
+        + (isHttpNonLoopback ? ` -AllowPlaintext` : "");
     } else {
       $("#windowsInstallerDownload").href = "#";
       $("#windowsInstallCommand").textContent = "";
     }
     $("#windowsInstallCommandIntro").textContent = usable
-      ? "Download this and run it on the new Windows device:"
+      ? ("Download this and run it on the new Windows device:" + (isHttpNonLoopback
+          ? " (plain HTTP, unencrypted -- see docs/TLS.md to enable TLS instead)"
+          : ""))
       : "Generate a one-time token to get the installer for a new Windows device.";
+    // The downloadable .exe has no way to opt into plaintext (no CLI to
+    // pass a flag to) -- it'll install, then the service will refuse to
+    // start, same as any other http:// non-local target without the
+    // opt-in. Point those admins at the PowerShell command instead.
+    $("#windowsInstallerSection").title = isHttpNonLoopback
+      ? "The downloadable .exe can't accept -AllowPlaintext -- use the PowerShell command below instead for a plain-HTTP server."
+      : "";
     return;
   }
 
@@ -1045,9 +1064,10 @@ function renderInstallCommand() {
     } else {
       const installerURL = `${serverURL}/install/linux.sh`;
       $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
-        + (caFingerprint ? ` ${shellQuote(caFingerprint)}` : "");
+        + (caFingerprint ? ` ${shellQuote(caFingerprint)}` : (isHttpNonLoopback ? ` --allow-plaintext` : ""));
       $("#installCommandIntro").textContent = "Run this command in a terminal on the new Linux device:";
-      $("#installCommandNote").textContent = "The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.";
+      $("#installCommandNote").textContent = "The command installs build prerequisites, compiles the small native agent, enrolls it, and starts its systemd service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page."
+        + (isHttpNonLoopback ? " This server is plain HTTP, so the command includes --allow-plaintext -- traffic to it will be unencrypted. See docs/TLS.md to enable TLS instead." : "");
     }
   } else {
     $("#installCommand").textContent = "";

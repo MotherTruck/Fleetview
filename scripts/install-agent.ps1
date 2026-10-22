@@ -24,12 +24,19 @@
 .PARAMETER InsecureTofu
     Explicit opt-out of CA fingerprint pinning for an https:// server --
     falls back to trust-on-first-use. Not recommended; see -CaFingerprint.
+.PARAMETER AllowPlaintext
+    Explicit opt-in required when -ServerUrl is http:// to a non-local
+    address: without it, the agent itself refuses to start (see
+    config.Load in agent/internal/config/config.go), so this is caught
+    here instead, before installing anything, rather than only surfacing
+    as a crash loop once the service tries to start.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$ServerUrl,
     [Parameter(Mandatory = $true)][string]$EnrollmentToken,
     [string]$CaFingerprint = "",
-    [switch]$InsecureTofu
+    [switch]$InsecureTofu,
+    [switch]$AllowPlaintext
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +45,13 @@ $ServerUrl = $ServerUrl.TrimEnd('/')
 if ($ServerUrl -like "https://*" -and [string]::IsNullOrEmpty($CaFingerprint) -and -not $InsecureTofu) {
     Write-Error "-ServerUrl is https:// but no -CaFingerprint was given -- refusing to install with only trust-on-first-use. See docs/TLS.md to get the fingerprint, or pass -InsecureTofu to proceed without pinning."
     exit 2
+}
+if ($ServerUrl -like "http://*" -and -not $AllowPlaintext) {
+    $plaintextHost = ([Uri]$ServerUrl).Host
+    if ($plaintextHost -notin @("127.0.0.1", "localhost", "::1")) {
+        Write-Error "-ServerUrl ($ServerUrl) is plain HTTP to a non-local address -- this would send the agent's credentials and every job result in clear text. Use an https:// URL instead (see docs/TLS.md), or pass -AllowPlaintext to proceed anyway if you understand the risk."
+        exit 2
+    }
 }
 
 # Normalize to bare uppercase hex so it matches regardless of how the admin
@@ -175,6 +189,9 @@ $configLines = @(
 )
 if ($caFile) {
     $configLines += "FLEETVIEW_CA_FILE=$caFile"
+}
+if ($AllowPlaintext) {
+    $configLines += "FLEETVIEW_ALLOW_PLAINTEXT=true"
 }
 $configPath = Join-Path $programData "agent.env"
 Set-Content -Path $configPath -Value $configLines -Encoding ascii
