@@ -21,7 +21,15 @@ if [[ -z "$server_url" || -z "$device_id" || -z "$agent_token" ]]; then
   exit 1
 fi
 
-code="${1:-}"
+force=false
+code=""
+for arg in "$@"; do
+  if [[ "$arg" == "--force" ]]; then
+    force=true
+  else
+    code="$arg"
+  fi
+done
 if [[ -z "$code" ]]; then
   read -r -s -p "Uninstall code (press Enter if protection is disabled): " code
   echo
@@ -31,11 +39,27 @@ escaped="${escaped//\"/\\\"}"
 
 response_file="$(mktemp)"
 trap 'rm -f "$response_file"' EXIT
+set +e
 status="$(printf '{"code":"%s"}' "$escaped" | curl -sS -o "$response_file" -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $agent_token" -H "X-Device-ID: $device_id" \
   --data-binary @- "$server_url/api/v1/agent/uninstall/verify")"
-if [[ "$status" != "200" ]]; then
+curl_exit=$?
+set -e
+# A device that genuinely can't reach the server (down link, stale/revoked
+# credentials after a migration, DNS broken) can never pass this check
+# through no fault of whoever is running this command -- without --force
+# that otherwise permanently strands the agent installed with no supported
+# way to remove it. A code the server actively rejected (reachable, non-200
+# status) is a different failure and --force must not paper over it.
+if [[ "$curl_exit" -ne 0 || "$status" == "000" ]]; then
+  if [[ "$force" == true ]]; then
+    echo "Could not reach $server_url to verify the uninstall code; removing locally anyway because --force was given. The server will still show this device as enrolled until its record is cleaned up there." >&2
+  else
+    echo "Could not reach $server_url to verify the uninstall code (curl exit $curl_exit). Re-run as: fleetview-agent-uninstall --force   to remove the agent locally anyway, once you're sure that's safe -- you'll still need to clean up its record on the server separately." >&2
+    exit 1
+  fi
+elif [[ "$status" != "200" ]]; then
   echo "Uninstall authorization failed (HTTP $status)." >&2
   cat "$response_file" >&2
   exit 1

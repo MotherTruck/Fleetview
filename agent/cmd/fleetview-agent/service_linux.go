@@ -15,7 +15,7 @@ func runAsServiceIfHosted(logger *log.Logger, configPath string) (handled bool, 
 	return false, nil
 }
 
-func controlService(action, configPath, uninstallCode string) error {
+func controlService(action, configPath, uninstallCode string, force bool) error {
 	return fmt.Errorf("-service %q is only supported on Windows; on Linux use systemd (see scripts/install-agent.sh and scripts/uninstall-agent.sh)", action)
 }
 

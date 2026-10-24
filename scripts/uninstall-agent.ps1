@@ -10,9 +10,16 @@
     just finds that binary so the command is as memorable as the Linux one.
 .PARAMETER Code
     The managed-uninstall code, if one is configured. Omit to be prompted.
+.PARAMETER Force
+    Remove the agent even if the server can't be reached to verify the
+    uninstall code -- for a device that's stopped communicating entirely
+    (down link, stale credentials after a server migration, etc.) and would
+    otherwise have no supported way to be removed. This does NOT bypass a
+    code the server is reachable and actively rejects.
 #>
 param(
-    [string]$Code = ""
+    [string]$Code = "",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,9 +30,8 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-if ($Code -ne "") {
-    & $exePath -service uninstall -uninstall-code $Code
-} else {
-    & $exePath -service uninstall
-}
+$exeArgs = @("-service", "uninstall")
+if ($Code -ne "") { $exeArgs += @("-uninstall-code", $Code) }
+if ($Force) { $exeArgs += "-force" }
+& $exePath @exeArgs
 exit $LASTEXITCODE

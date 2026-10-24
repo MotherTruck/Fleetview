@@ -18,7 +18,7 @@ func runAsServiceIfHosted(logger *log.Logger, configPath string) (handled bool, 
 	return false, nil
 }
 
-func controlService(action, configPath, uninstallCode string) error {
+func controlService(action, configPath, uninstallCode string, force bool) error {
 	return fmt.Errorf("-service %q is only supported on Windows; on FreeBSD/OPNsense use service(8) (see scripts/install-agent-opnsense.sh and scripts/uninstall-agent.sh)", action)
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -114,12 +115,12 @@ func (a *agentService) Execute(_ []string, requests <-chan svc.ChangeRequest, ch
 	}
 }
 
-func controlService(action, configPath, uninstallCode string) error {
+func controlService(action, configPath, uninstallCode string, force bool) error {
 	switch action {
 	case "install":
 		return installService(configPath)
 	case "uninstall":
-		return uninstallService(configPath, uninstallCode)
+		return uninstallService(configPath, uninstallCode, force)
 	case "start":
 		return startService()
 	case "stop":
@@ -187,7 +188,7 @@ func installService(configPath string) error {
 	return nil
 }
 
-func uninstallService(configPath, uninstallCode string) error {
+func uninstallService(configPath, uninstallCode string, force bool) error {
 	cfg, cfgErr := config.Load(configPath)
 	var state model.State
 	var stateErr error
@@ -207,7 +208,20 @@ func uninstallService(configPath, uninstallCode string) error {
 		verifyErr := api.VerifyUninstall(ctx, code)
 		cancel()
 		if verifyErr != nil {
-			return fmt.Errorf("uninstall authorization failed: %w", verifyErr)
+			// A device that genuinely can't reach the server (down link,
+			// stale/revoked credentials after a migration, DNS broken) can
+			// never satisfy this check through no fault of the admin
+			// running this command -- without -Force that otherwise
+			// permanently strands the agent installed with no supported
+			// way to remove it. A code the server actively rejected is a
+			// different failure (errors.Is false here, since that comes
+			// back as a plain "server returned ..." error, not wrapped in
+			// ErrServerUnreachable) and -Force must not paper over it.
+			if force && errors.Is(verifyErr, client.ErrServerUnreachable) {
+				fmt.Printf("Could not reach the server to verify the uninstall code (%v); removing locally anyway because -Force was given. The server will still show this device as enrolled until its record is cleaned up there.\n", verifyErr)
+			} else {
+				return fmt.Errorf("uninstall authorization failed: %w", verifyErr)
+			}
 		}
 	} else {
 		fmt.Println("No active enrollment found to verify; removing the service anyway.")

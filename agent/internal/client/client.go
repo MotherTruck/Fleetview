@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,14 @@ import (
 	"fleetview-agent/internal/config"
 	"fleetview-agent/internal/model"
 )
+
+// ErrServerUnreachable wraps a request failure that never got an HTTP
+// response at all (DNS, dial, TLS, timeout) -- as opposed to one the server
+// actively answered, which fails with a plain "server returned ..." error
+// instead. Callers that need to tell "the server said no" apart from "the
+// server couldn't be reached" (see VerifyUninstall's caller on Windows)
+// check for this with errors.Is.
+var ErrServerUnreachable = errors.New("could not reach the server")
 
 type Client struct {
 	baseURL string
@@ -276,7 +285,7 @@ func (c *Client) requestAllowNoContent(ctx context.Context, method, path string,
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: %v", ErrServerUnreachable, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNoContent {

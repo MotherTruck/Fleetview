@@ -51,6 +51,7 @@ func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to agent configuration")
 	serviceAction := flag.String("service", "", "service control action: install, uninstall, start, stop (Windows only)")
 	uninstallCode := flag.String("uninstall-code", "", "managed-uninstall code for -service uninstall; prompted for if omitted and one is configured")
+	force := flag.Bool("force", false, "for -service uninstall: remove the agent locally even if the server can't be reached to verify the uninstall code (does not bypass a code the server actually rejects)")
 	finishUpgradeTarget := flag.String("finish-upgrade", "", "internal: complete a staged agent upgrade by replacing the binary at this path (Windows only; invoked by the agent itself, not meant to be run by hand)")
 	flag.Parse()
 	logger := log.New(os.Stdout, "fleetview-agent: ", log.LstdFlags|log.LUTC)
@@ -63,7 +64,7 @@ func main() {
 	}
 
 	if *serviceAction != "" {
-		if err := controlService(*serviceAction, *configPath, *uninstallCode); err != nil {
+		if err := controlService(*serviceAction, *configPath, *uninstallCode, *force); err != nil {
 			logger.Fatal(err)
 		}
 		return
