@@ -36,6 +36,7 @@ const maxPayloadLen = 1 << 20
 type Payload struct {
 	ServerURL       string `json:"server_url"`
 	EnrollmentToken string `json:"enrollment_token"`
+	AllowPlaintext  bool   `json:"allow_plaintext"`
 }
 
 // locateTrailer finds a well-formed trailer at the very end of data and

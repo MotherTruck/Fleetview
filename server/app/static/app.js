@@ -1034,13 +1034,12 @@ function renderInstallCommand() {
           ? " (plain HTTP, unencrypted -- see docs/TLS.md to enable TLS instead)"
           : ""))
       : "Generate a one-time token to get the installer for a new Windows device.";
-    // The downloadable .exe has no way to opt into plaintext (no CLI to
-    // pass a flag to) -- it'll install, then the service will refuse to
-    // start, same as any other http:// non-local target without the
-    // opt-in. Point those admins at the PowerShell command instead.
-    $("#windowsInstallerSection").title = isHttpNonLoopback
-      ? "The downloadable .exe can't accept -AllowPlaintext -- use the PowerShell command below instead for a plain-HTTP server."
-      : "";
+    // The downloadable .exe has no command line to opt into plaintext on,
+    // but install_agent_installer_windows (deployment.rs) bakes the same
+    // automatic opt-in into the binary's trailer server-side when
+    // server_url is http:// to a non-local address, so no warning is
+    // needed here -- it behaves the same as the PowerShell command below.
+    $("#windowsInstallerSection").title = "";
     return;
   }
 

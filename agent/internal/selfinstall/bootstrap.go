@@ -20,11 +20,15 @@ import (
 // fingerprint into a double-click, unlike those scripts, which now
 // require one. An admin who wants that stronger guarantee uses the
 // equivalent PowerShell command instead (offered alongside the
-// downloadable installer for exactly that reason). This path's one
-// remaining backstop against plain (non-TLS) http:// to a non-local
-// server is config.Load's own refusal at agent startup, the same check
-// every install method goes through regardless of how the config file
-// was written.
+// downloadable installer for exactly that reason). payload.AllowPlaintext
+// is this path's equivalent of -AllowPlaintext -- there's no command line
+// to pass that on either, so the server decides it the same way the
+// dashboard's own generated PowerShell command does (see
+// install_agent_installer_windows, deployment.rs) and bakes the answer
+// into the trailer. Without it, a plain-HTTP, non-local server left this
+// install succeeding and the service silently crash-looping on every
+// start, forever invisible in the console -- config.Load's refusal at
+// agent startup is still the final backstop either way.
 func WriteConfig(configPath, programDataDir string, payload Payload) error {
 	if err := os.MkdirAll(programDataDir, 0o700); err != nil {
 		return err
@@ -38,6 +42,9 @@ func WriteConfig(configPath, programDataDir string, payload Payload) error {
 		"FLEETVIEW_JOB_POLL_SECONDS=10",
 		"FLEETVIEW_REQUEST_TIMEOUT_SECONDS=60",
 		"FLEETVIEW_ALLOW_INSECURE_TLS=false",
+	}
+	if payload.AllowPlaintext {
+		lines = append(lines, "FLEETVIEW_ALLOW_PLAINTEXT=true")
 	}
 	if caFile := FetchBootstrapCA(payload.ServerURL, filepath.Join(programDataDir, "ca.crt")); caFile != "" {
 		lines = append(lines, "FLEETVIEW_CA_FILE="+caFile)

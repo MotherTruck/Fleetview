@@ -1245,6 +1245,22 @@ struct InstallerQuery {
 // trust boundary: this is the same server URL and token an admin already
 // gets back from this server to paste into a command -- just packaged
 // into a file instead of command-line text.
+// Mirrors the agent's own isLoopbackPlaintextTarget (config.go) and the
+// install scripts' identical check: plain http:// to anything but the
+// local machine is exempt from nothing here, it's just how we decide
+// whether to embed the opt-in the agent otherwise refuses to start
+// without. Deliberately no "url" crate dependency for one small check
+// that's already done the same way, by hand, in three other places.
+fn is_http_non_loopback(server_url: &str) -> bool {
+    let Some(rest) = server_url.strip_prefix("http://") else {
+        return false;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    !matches!(host, "127.0.0.1" | "localhost" | "::1" | "")
+}
+
 async fn install_agent_installer_windows(Query(query): Query<InstallerQuery>) -> Result<impl IntoResponse, ApiError> {
     let server_url = query.server_url.trim();
     let token = query.token.trim();
@@ -1257,7 +1273,19 @@ async fn install_agent_installer_windows(Query(query): Query<InstallerQuery>) ->
     let mut data = tokio::fs::read(install_dir().join("agent-bin").join("windows-amd64").join("fleetview-agent.exe"))
         .await
         .map_err(|_| ApiError::not_found("Published Windows agent binary is not available"))?;
-    let payload = json!({ "server_url": server_url, "enrollment_token": token }).to_string();
+    // The downloadable installer has no command line to pass -AllowPlaintext
+    // on (see internal/selfinstall.WriteConfig's own comment) -- without
+    // this, a plain-HTTP, non-local server left the service installing
+    // successfully and then silently crash-looping on every start, forever
+    // invisible in the console. Same automatic opt-in the dashboard already
+    // appends to the PowerShell command it offers alongside this download.
+    let allow_plaintext = is_http_non_loopback(server_url);
+    let payload = json!({
+        "server_url": server_url,
+        "enrollment_token": token,
+        "allow_plaintext": allow_plaintext,
+    })
+    .to_string();
     let payload_bytes = payload.into_bytes();
     let payload_len = u32::try_from(payload_bytes.len())
         .map_err(|_| ApiError::bad_request("server_url or token is too long"))?;
@@ -1271,6 +1299,21 @@ async fn install_agent_installer_windows(Query(query): Query<InstallerQuery>) ->
         ],
         data,
     ))
+}
+
+#[cfg(test)]
+mod installer_plaintext_tests {
+    use super::*;
+
+    #[test]
+    fn allows_plaintext_only_for_http_to_a_non_loopback_host() {
+        assert!(is_http_non_loopback("http://192.168.1.63:8080"));
+        assert!(is_http_non_loopback("http://fleetview.example.internal"));
+        assert!(!is_http_non_loopback("http://127.0.0.1:8080"));
+        assert!(!is_http_non_loopback("http://localhost:8080"));
+        assert!(!is_http_non_loopback("http://[::1]:8080"));
+        assert!(!is_http_non_loopback("https://192.168.1.63:8443"));
+    }
 }
 
 #[cfg(test)]

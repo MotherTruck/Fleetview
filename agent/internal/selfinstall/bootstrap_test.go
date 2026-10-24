@@ -169,6 +169,22 @@ func TestWriteConfig_PlainHTTP_NoCALine(t *testing.T) {
 	}
 }
 
+func TestWriteConfig_AllowPlaintext_WritesOptIn(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "agent.env")
+	payload := Payload{ServerURL: "http://192.168.1.50:8080", EnrollmentToken: "fv_tok123", AllowPlaintext: true}
+	if err := WriteConfig(configPath, dir, payload); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !strings.Contains(string(data), "FLEETVIEW_ALLOW_PLAINTEXT=true") {
+		t.Errorf("expected FLEETVIEW_ALLOW_PLAINTEXT=true; got:\n%s", string(data))
+	}
+}
+
 func TestWriteConfig_HTTPS_IncludesCALine(t *testing.T) {
 	srv := newTestTLSServer(t)
 	defer srv.Close()
