@@ -49,3 +49,23 @@ func TestAPTPlanRejectsUnapprovedDependenciesAndVersionChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestAPTPlanAllowsKernelMetaPackageDependencies(t *testing.T) {
+	wanted := map[string]string{"linux-image-amd64": "6.12.113-1"}
+	plan := "Inst linux-image-amd64 [6.12.9-1] (6.12.113-1 Debian:stable [amd64])\n" +
+		"Inst linux-image-6.12.113+deb13-amd64 (6.12.113-1 Debian:stable [amd64])\n" +
+		"Inst linux-headers-6.12.113+deb13-amd64 (6.12.113-1 Debian:stable [amd64])\n"
+	if err := verifyAPTPlan(plan, wanted); err != nil {
+		t.Fatalf("expected kernel meta-package dependencies to be allowed: %v", err)
+	}
+
+	// The allowance only applies when something in the kernel family was
+	// actually approved -- an unrelated package can't ride along just
+	// because its name happens to resemble one.
+	wanted = map[string]string{"curl": "2.0"}
+	plan = "Inst curl [1.0] (2.0 Debian:stable [amd64])\n" +
+		"Inst linux-image-6.12.113+deb13-amd64 (6.12.113-1 Debian:stable [amd64])\n"
+	if err := verifyAPTPlan(plan, wanted); err == nil {
+		t.Fatal("unexpectedly allowed a kernel package with no kernel-family approval")
+	}
+}

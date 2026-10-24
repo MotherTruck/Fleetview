@@ -17,6 +17,14 @@ type APT struct{}
 
 var aptUpgradePattern = regexp.MustCompile(`^([^/]+)/\S+\s+(\S+)\s+(\S+)\s+\[upgradable from:\s*([^\]]+)\]`)
 
+// aptSandboxArgs disables apt's own internal drop to the _apt user for its
+// network methods. That drop can fail with "seteuid 42 failed" (and the
+// https method dying as a result) depending on the host's own privilege
+// restrictions -- this agent already runs the whole apt-get invocation as
+// root by design (see fleetview-agent.service), so apt re-sandboxing itself
+// down to _apt adds no real containment and isn't worth the failure mode.
+var aptSandboxArgs = []string{"-o", "APT::Sandbox::User=root"}
+
 func (APT) Name() string { return "apt" }
 
 func (APT) Installed(ctx context.Context) ([]model.Package, error) {
@@ -37,7 +45,7 @@ func (APT) Installed(ctx context.Context) ([]model.Package, error) {
 func (APT) Updates(ctx context.Context) ([]model.Update, error) {
 	updateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	updateOutput, err := exec.CommandContext(updateCtx, "apt-get", "update").CombinedOutput()
+	updateOutput, err := exec.CommandContext(updateCtx, "apt-get", append([]string{"update"}, aptSandboxArgs...)...).CombinedOutput()
 	if err != nil {
 		if updateCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("apt-get update timed out after 5 minutes")
@@ -73,11 +81,11 @@ func (APT) Updates(ctx context.Context) ([]model.Update, error) {
 func (APT) InstallUpdates() (string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	updateOutput, updateErr := exec.CommandContext(ctx, "apt-get", "update").CombinedOutput()
+	updateOutput, updateErr := exec.CommandContext(ctx, "apt-get", append([]string{"update"}, aptSandboxArgs...)...).CombinedOutput()
 	if updateErr != nil {
 		return truncate(string(updateOutput), 1_048_576), exitCode(updateErr), updateErr
 	}
-	command := exec.CommandContext(ctx, "apt-get", "-y", "upgrade")
+	command := exec.CommandContext(ctx, "apt-get", append([]string{"-y", "upgrade"}, aptSandboxArgs...)...)
 	command.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	upgradeOutput, err := command.CombinedOutput()
 	output := append(updateOutput, upgradeOutput...)
@@ -90,11 +98,11 @@ func (APT) InstallUpdates() (string, int, error) {
 func (APT) Install(parent context.Context, packageName string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
-	updateOutput, updateErr := exec.CommandContext(ctx, "apt-get", "update").CombinedOutput()
+	updateOutput, updateErr := exec.CommandContext(ctx, "apt-get", append([]string{"update"}, aptSandboxArgs...)...).CombinedOutput()
 	if updateErr != nil {
 		return truncate(string(updateOutput), 1_048_576), exitCode(updateErr), updateErr
 	}
-	command := exec.CommandContext(ctx, "apt-get", "-y", "install", "--", packageName)
+	command := exec.CommandContext(ctx, "apt-get", append([]string{"-y", "install", "--", packageName}, aptSandboxArgs...)...)
 	command.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 	installOutput, err := command.CombinedOutput()
 	output := append(updateOutput, installOutput...)

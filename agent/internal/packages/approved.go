@@ -14,6 +14,18 @@ import (
 
 var aptPlannedInstall = regexp.MustCompile(`(?m)^Inst ([^ ]+) (?:\[[^\]]+\] )?\(([^ ]+) `)
 
+// kernelFamilyPackage matches a kernel meta-package (e.g. linux-image-amd64)
+// as well as the concrete versioned package it depends on (e.g.
+// linux-image-6.12.113+deb13-amd64). Approving the meta-package's upgrade
+// is how a kernel update is actually offered for approval -- `apt list
+// --upgradable` reports only the meta-package name, since the concrete
+// kernel/headers/modules package it pulls in is a brand new install, not an
+// in-place upgrade of anything already present. Requiring that concrete
+// package to also appear in the approved set verbatim would make approving
+// any kernel update impossible, so it's allowed as an implied consequence
+// of approving a kernel-family package.
+var kernelFamilyPackage = regexp.MustCompile(`^linux-(image|headers|modules|modules-extra)-`)
+
 // InstallApproved rejects stale approvals before changing packages. Apt's
 // simulated transaction must contain exactly the approved packages/versions;
 // dependency changes outside that set need their own approval.
@@ -68,7 +80,7 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 		for _, patch := range approved {
 			args = append(args, patch.Package+"="+patch.Version)
 		}
-		plan := exec.CommandContext(ctx, "apt-get", append([]string{"-s"}, args...)...)
+		plan := exec.CommandContext(ctx, "apt-get", append(append([]string{"-s"}, args...), aptSandboxArgs...)...)
 		plan.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		preview, planErr := plan.CombinedOutput()
 		if planErr != nil {
@@ -77,7 +89,7 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 		if err := verifyAPTPlan(string(preview), wanted); err != nil {
 			return truncate(string(preview), 1_048_576), -1, err
 		}
-		command := exec.CommandContext(ctx, "apt-get", append([]string{"-y"}, args...)...)
+		command := exec.CommandContext(ctx, "apt-get", append(append([]string{"-y"}, args...), aptSandboxArgs...)...)
 		command.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		output, runErr := command.CombinedOutput()
 		return truncate(string(output), 1_048_576), exitCode(runErr), runErr
@@ -139,7 +151,14 @@ func InstallApproved(parent context.Context, manager Manager, approved []model.A
 }
 
 func verifyAPTPlan(output string, wanted map[string]string) error {
-	changed := make(map[string]string)
+	kernelFamilyApproved := false
+	for pkg := range wanted {
+		if kernelFamilyPackage.MatchString(pkg) {
+			kernelFamilyApproved = true
+			break
+		}
+	}
+	changed := make(map[string]bool)
 	for _, line := range strings.Split(output, "\n") {
 		if !strings.HasPrefix(line, "Inst ") {
 			continue
@@ -148,13 +167,20 @@ func verifyAPTPlan(output string, wanted map[string]string) error {
 		if matches == nil {
 			return fmt.Errorf("cannot verify apt transaction")
 		}
-		changed[matches[1]] = matches[2]
-		if wanted[matches[1]] != matches[2] {
-			return fmt.Errorf("apt would change unapproved package or version %s", matches[1])
+		name, version := matches[1], matches[2]
+		if wanted[name] == version {
+			changed[name] = true
+			continue
 		}
+		if kernelFamilyApproved && kernelFamilyPackage.MatchString(name) {
+			continue
+		}
+		return fmt.Errorf("apt would change unapproved package or version %s", name)
 	}
-	if len(changed) != len(wanted) {
-		return fmt.Errorf("apt plan does not match the approved set")
+	for pkg := range wanted {
+		if !changed[pkg] {
+			return fmt.Errorf("apt plan does not match the approved set")
+		}
 	}
 	return nil
 }
