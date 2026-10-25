@@ -337,23 +337,23 @@ async fn fetch_device(state: &AppState, id: &str) -> Result<Option<Device>, ApiE
 }
 
 /// Piggybacks on the patch and vulnerability report endpoints instead of
-/// running on a schedule, so it costs one extra SELECT (and, once a day
-/// per device, one INSERT) on requests the agent is already making.
+/// running on its own schedule, so it costs one extra write on requests the
+/// agent is already making. Upserts rather than skip-if-exists-for-today:
+/// the old write-once behavior froze each day's `online` at whatever it was
+/// on the FIRST report of the day -- and the only way this function runs at
+/// all is a report succeeding, which itself proves the device was online at
+/// that instant, so practically every day's snapshot came out `online =
+/// true` regardless of how much of the rest of the day the device then
+/// spent offline. Upserting means a later report the same day (closer to
+/// the device's actual final state) overwrites it instead. Still can't see
+/// a device that reports once early and then goes offline for the rest of
+/// the day -- record_compliance_snapshots_sweep (below) is what actually
+/// closes that gap, by not depending on the device reporting at all.
 async fn record_compliance_snapshot(
     tx: &mut sqlx::PgConnection,
     device: &Device,
 ) -> Result<(), ApiError> {
     let today = Utc::now().format("%Y-%m-%d").to_string();
-    let existing: Option<i32> = sqlx::query_scalar(
-        "SELECT id FROM compliance_snapshots WHERE device_id = $1 AND snapshot_date = $2",
-    )
-    .bind(&device.id)
-    .bind(&today)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if existing.is_some() {
-        return Ok(());
-    }
     let security = device.inventory.get("_security").cloned().unwrap_or(json!({}));
     let vulnerabilities = security.get("vulnerabilities").and_then(Value::as_array).cloned().unwrap_or_default();
     let critical = vulnerabilities
@@ -369,7 +369,15 @@ async fn record_compliance_snapshot(
         "INSERT INTO compliance_snapshots \
          (device_id, snapshot_date, update_count, security_update_count, vulnerability_count, \
           critical_vulnerability_count, high_vulnerability_count, online, recorded_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) \
+         ON CONFLICT (device_id, snapshot_date) DO UPDATE SET \
+           update_count = EXCLUDED.update_count, \
+           security_update_count = EXCLUDED.security_update_count, \
+           vulnerability_count = EXCLUDED.vulnerability_count, \
+           critical_vulnerability_count = EXCLUDED.critical_vulnerability_count, \
+           high_vulnerability_count = EXCLUDED.high_vulnerability_count, \
+           online = EXCLUDED.online, \
+           recorded_at = now()",
     )
     .bind(&device.id)
     .bind(&today)
@@ -961,6 +969,92 @@ pub async fn reap_stale_jobs_loop(pool: PgPool) {
     loop {
         reap_stale_jobs(&pool).await;
         tokio::time::sleep(std::time::Duration::from_secs(job_reap_interval_seconds())).await;
+    }
+}
+
+/// Closes the real gap record_compliance_snapshot's piggybacking leaves:
+/// that function only ever runs as a side effect of a report succeeding,
+/// so a device that goes offline and simply never reports again for the
+/// rest of the day gets no further writes at all -- its last snapshot for
+/// that day stays whatever it was at its last successful report (usually
+/// `online = true`, since reporting at all proves it was online then), and
+/// a device offline for an ENTIRE day gets no row whatsoever, silently
+/// dropped from compliance_history's percentage rather than counted as 0%.
+/// Runs independently of agent traffic so both cases get a correct,
+/// continuously-refreshed `online` value for today, computed the same way
+/// record_compliance_snapshot computes it (last_seen within the last two
+/// minutes) regardless of whether the device has said anything recently.
+async fn sweep_compliance_snapshots(pool: &PgPool) {
+    let devices = match sqlx::query_as::<_, Device>(
+        "SELECT id, hostname, display_name, platform, os_name, os_version, architecture, \
+         package_manager, agent_version, agent_token_hash, enrolled_at, last_seen, inventory, \
+         installed_packages, available_updates, update_count, security_update_count, last_scan_at \
+         FROM devices",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(devices) => devices,
+        Err(error) => {
+            tracing::warn!("compliance snapshot sweep: could not list devices: {error}");
+            return;
+        }
+    };
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    for device in &devices {
+        let security = device.inventory.get("_security").cloned().unwrap_or(json!({}));
+        let vulnerabilities = security.get("vulnerabilities").and_then(Value::as_array).cloned().unwrap_or_default();
+        let critical = vulnerabilities
+            .iter()
+            .filter(|v| v.get("severity").and_then(Value::as_str).unwrap_or("").to_uppercase() == "CRITICAL")
+            .count() as i32;
+        let high = vulnerabilities
+            .iter()
+            .filter(|v| v.get("severity").and_then(Value::as_str).unwrap_or("").to_uppercase() == "HIGH")
+            .count() as i32;
+        let online = device.last_seen >= Utc::now() - Duration::minutes(2);
+        let result = sqlx::query(
+            "INSERT INTO compliance_snapshots \
+             (device_id, snapshot_date, update_count, security_update_count, vulnerability_count, \
+              critical_vulnerability_count, high_vulnerability_count, online, recorded_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) \
+             ON CONFLICT (device_id, snapshot_date) DO UPDATE SET \
+               update_count = EXCLUDED.update_count, \
+               security_update_count = EXCLUDED.security_update_count, \
+               vulnerability_count = EXCLUDED.vulnerability_count, \
+               critical_vulnerability_count = EXCLUDED.critical_vulnerability_count, \
+               high_vulnerability_count = EXCLUDED.high_vulnerability_count, \
+               online = EXCLUDED.online, \
+               recorded_at = now()",
+        )
+        .bind(&device.id)
+        .bind(&today)
+        .bind(device.update_count)
+        .bind(device.security_update_count)
+        .bind(vulnerabilities.len() as i32)
+        .bind(critical)
+        .bind(high)
+        .bind(online)
+        .execute(pool)
+        .await;
+        if let Err(error) = result {
+            tracing::warn!("compliance snapshot sweep: device {}: {error}", device.id);
+        }
+    }
+}
+
+fn compliance_sweep_interval_seconds() -> u64 {
+    std::env::var("FLEETVIEW_COMPLIANCE_SWEEP_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(300)
+}
+
+pub async fn compliance_snapshot_sweep_loop(pool: PgPool) {
+    loop {
+        sweep_compliance_snapshots(&pool).await;
+        tokio::time::sleep(std::time::Duration::from_secs(compliance_sweep_interval_seconds())).await;
     }
 }
 

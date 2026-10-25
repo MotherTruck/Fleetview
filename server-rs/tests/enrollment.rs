@@ -401,7 +401,14 @@ async fn report_records_one_compliance_snapshot_per_device_per_day() {
     let rows: Vec<(i32,)> =
         sqlx::query_as("SELECT update_count FROM compliance_snapshots WHERE device_id = $1").bind(&device_id).fetch_all(&pool).await.unwrap();
     assert_eq!(rows.len(), 1, "same UTC day must not add a second snapshot row");
-    assert_eq!(rows[0].0, 5, "the first report of the day sets the snapshot, later ones must not overwrite it");
+    // Upserts, not write-once: the snapshot reflects the LATEST report of
+    // the day, not the first. Write-once meant a day's `online` froze at
+    // whatever it was on the first report -- and the only way this write
+    // happens at all is a report succeeding, which itself proves the device
+    // was online right then, so practically every day came out `online =
+    // true` regardless of how much of the rest of the day it then spent
+    // offline (the real bug this test used to enshrine as correct).
+    assert_eq!(rows[0].0, 1, "a later report the same day must overwrite the snapshot, not be ignored");
 }
 
 #[tokio::test]
