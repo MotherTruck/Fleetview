@@ -128,14 +128,20 @@ pub fn generate_key() -> String {
     URL_SAFE.encode(bytes)
 }
 
+// FLEETVIEW_SECRET_KEY is process-global and Rust runs tests on multiple
+// threads by default, so mutating it needs a lock to avoid cross-test races.
+// Shared by every #[cfg(test)] mod in this file that touches the env var --
+// mod tests and mod interop each used to declare their own ENV_LOCK, which
+// only serialized races *within* that module, not against each other, so a
+// test in one module could still clear/overwrite the var out from under a
+// test running concurrently in the other (observed in CI as a spurious
+// SecretKeyNotConfigured in round_trip).
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // FLEETVIEW_SECRET_KEY is process-global and Rust runs tests on multiple
-    // threads by default, so mutating it needs a lock to avoid cross-test races.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_key<T>(key: &str, f: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -181,8 +187,6 @@ mod interop {
     //! the same key/plaintext was independently confirmed decryptable by
     //! Python's `Fernet.decrypt`.
     use super::*;
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const KEY: &str = "yu30SfPizM0xv2LEurXELmKigTYar_BTRm1vgp8ricc=";
     const PY_TOKEN: &str = "gAAAAABqvHoBCDapNKpjaFYw0_OolAGrXrS-iCMi1qzxskWFUKHie03VADEAqBcCfSXrwaKBNGG-dDJiscPYeB4PLVc4kXRbhOMUYc4KBzKOATpDfPw6pvY=";
