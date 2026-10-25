@@ -124,7 +124,16 @@ function connectLiveSocket(path, { onMessage, onOpen, onClose, shouldReconnect, 
   attempt();
   return {
     close: () => { holder.stopped = true; holder.socket?.close(); },
-    send: (payload) => { if (holder.socket?.readyState === WebSocket.OPEN) holder.socket.send(JSON.stringify(payload)); },
+    // Returns whether the payload was actually sent, so a caller that
+    // needs to know (e.g. an upload) can tell "silently dropped because
+    // the socket isn't open right now" apart from "sent" instead of the
+    // two looking identical, which is exactly what made upload failures
+    // look like nothing happened at all.
+    send: (payload) => {
+      if (holder.socket?.readyState !== WebSocket.OPEN) return false;
+      holder.socket.send(JSON.stringify(payload));
+      return true;
+    },
   };
 }
 
@@ -211,6 +220,21 @@ function connectTerminal(deviceId) {
   term.loadAddon(fit);
   term.open(container);
   fit.fit();
+  // xterm.js captures every keystroke itself (including Ctrl/Cmd+C) and
+  // sends it to the remote shell as input by default -- with a selection
+  // active, that means the terminal fires SIGINT instead of letting the
+  // browser's native copy run, so there is no way to copy text out of it
+  // at all. Standard xterm.js workaround: when Ctrl/Cmd+C is pressed and
+  // something is selected, tell xterm not to handle the event (return
+  // false) so it falls through to the browser's normal copy instead of
+  // being sent to the shell. With nothing selected, Ctrl+C still reaches
+  // the shell as SIGINT exactly as before.
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type === "keydown" && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && term.hasSelection()) {
+      return false;
+    }
+    return true;
+  });
   state.xterm = term;
   state.xtermFit = fit;
   $("#terminalStatus").textContent = "Connecting…";
@@ -273,8 +297,17 @@ function connectFiles(deviceId, path = "") {
     state.filesDeviceId = deviceId;
     $("#filesStatus").textContent = "Connecting…";
     const socket = connectLiveSocket(`/api/v1/admin/devices/${deviceId}/files-live`, {
-      shouldReconnect: () => false,
-      onOpen: () => { $("#filesStatus").textContent = "Connected"; requestFilesList(path); },
+      // Contrary to this function's own leading comment, this used to be
+      // hardcoded to never reconnect -- so a connection dropped by any
+      // idle timeout, network blip, or backgrounded tab left state.filesSocket
+      // holding a permanently dead socket. Every later list/read/write
+      // (including an upload) silently no-oped forever after that (see
+      // connectLiveSocket's send(), which only checks readyState without
+      // raising anything), with nothing in the UI beyond a now-easy-to-miss
+      // "Disconnected" status. Reconnecting is genuinely harmless here, so
+      // actually do what the comment already claimed.
+      shouldReconnect: () => state.filesDeviceId === deviceId,
+      onOpen: () => { $("#filesStatus").textContent = "Connected"; requestFilesList(state.filesPath || path); },
       onClose: () => { $("#filesStatus").textContent = "Disconnected"; },
       onMessage: (message) => {
         if (message.type === "files_list_result") {
@@ -416,7 +449,8 @@ function uploadFileToCurrentDirectory(file) {
   const reader = new FileReader();
   reader.onload = () => {
     const bytes = new Uint8Array(reader.result);
-    state.filesSocket?.send({ type: "write", path: destination, data: bytesToBase64(bytes) });
+    const sent = state.filesSocket?.send({ type: "write", path: destination, data: bytesToBase64(bytes) });
+    if (!sent) showNotice("Not connected to this device's file session right now -- reopen the Files tab and try again.", true);
   };
   reader.onerror = () => showNotice("Could not read the selected file.", true);
   reader.readAsArrayBuffer(file);
