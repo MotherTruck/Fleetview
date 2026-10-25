@@ -845,6 +845,32 @@ FLEETVIEW_PORT=8080</code></pre>
       </form>
     </dialog>
 
+    <dialog id="filesSendDialog" class="device-dialog">
+      <form id="filesSendForm" class="files-edit-form">
+        <div class="detail-header">
+          <div>
+            <p class="eyebrow">FILE BROWSER</p>
+            <h2>Send file to another device</h2>
+          </div>
+          <div class="detail-header-actions">
+            <button id="closeFilesSend" type="button" class="icon-button secondary" aria-label="Close">×</button>
+          </div>
+        </div>
+        <p class="form-note">From this device: <code id="filesSendSourcePath"></code></p>
+        <label>Destination device
+          <select id="filesSendTarget" required></select>
+        </label>
+        <label>Destination path
+          <input id="filesSendDestination" type="text" maxlength="4096" required>
+        </label>
+        <p id="filesSendNote" class="form-note"></p>
+        <div class="dialog-actions">
+          <button id="cancelFilesSend" type="button" class="secondary">Cancel</button>
+          <button id="sendFilesSend" type="submit">Send</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="/static/vendor/xterm/xterm.js" defer></script>
     <script src="/static/vendor/xterm/xterm-addon-fit.js" defer></script>
     <script src="/static/app.js?v=0.23.1" defer></script>

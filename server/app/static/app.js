@@ -314,7 +314,9 @@ function connectFiles(deviceId, path = "") {
           $("#filesStatus").textContent = "Live";
           renderFilesListing(message);
         } else if (message.type === "files_read_result") {
-          if (state.filesEditingPath === message.path) {
+          if (state.filesSendingPath === message.path) {
+            handleFilesSendRead(message);
+          } else if (state.filesEditingPath === message.path) {
             openFilesEditorWithContent(message);
           } else {
             handleFileDownload(message);
@@ -375,7 +377,8 @@ function renderFilesListing(message) {
     }
     return `<tr><td>${escapeHtml(entry.name)}</td><td>${formatBytes(entry.size)}</td><td>${escapeHtml(fullDate(entry.modified_at))}</td>` +
       `<td><button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button> ` +
-      `<button type="button" class="secondary" data-files-edit="${escapeHtml(fullPath)}">Edit</button></td></tr>`;
+      `<button type="button" class="secondary" data-files-edit="${escapeHtml(fullPath)}">Edit</button> ` +
+      `<button type="button" class="secondary" data-files-send="${escapeHtml(fullPath)}">Send to device</button></td></tr>`;
   }).join("");
   $("#filesListing").innerHTML = rows || '<tr><td colspan="4" class="empty">Empty directory.</td></tr>';
   if (message.truncated) {
@@ -430,6 +433,98 @@ function closeFilesEditor() {
   state.filesEditingPath = null;
   $("#filesEditDialog").close();
   $("#filesEditContent").value = "";
+}
+
+// Sending a file to another device: reuses the exact same files-live
+// protocol as download (a "read" on the source device, already open --
+// this is the device currently being browsed) and upload (a "write" on
+// the target device), chained together in the browser instead of making
+// the admin download then re-upload by hand. The bytes still pass through
+// the browser tab -- there is no server-side device-to-device relay --
+// but that's invisible to the admin and reuses 100% of the existing,
+// already-size-capped read/write path with no server or agent changes.
+
+// Toggled on while a read or write is actually in flight, not just while
+// the dialog is open -- also disables Cancel/Close so the dialog can't be
+// dismissed mid-transfer. Dismissing it early would null out
+// filesSendingPath before the in-flight files_read_result for it arrives,
+// and that result would then fall through to the download handler instead
+// (a stray browser download, not a correctness issue, but confusing) since
+// there would be nothing left to tell it apart from an ordinary download.
+function setFilesSendBusy(busy) {
+  $("#sendFilesSend").disabled = busy;
+  $("#cancelFilesSend").disabled = busy;
+  $("#closeFilesSend").disabled = busy;
+}
+
+function openFilesSendDialog(path) {
+  const options = state.devices
+    .filter((device) => device.id !== state.filesDeviceId)
+    .map((device) => `<option value="${escapeHtml(device.id)}">${escapeHtml(device.display_name || device.hostname)}</option>`)
+    .join("");
+  if (!options) { showNotice("No other enrolled devices to send this file to.", true); return; }
+  state.filesSendSourcePath = path;
+  $("#filesSendSourcePath").textContent = path;
+  $("#filesSendTarget").innerHTML = options;
+  $("#filesSendDestination").value = path;
+  $("#filesSendNote").textContent = "";
+  setFilesSendBusy(false);
+  $("#filesSendDialog").showModal();
+}
+
+function closeFilesSendDialog() {
+  state.filesSendSourcePath = null;
+  state.filesSendingPath = null;
+  $("#filesSendDialog").close();
+}
+
+function handleFilesSendRead(message) {
+  state.filesSendingPath = null;
+  if (message.error) { $("#filesSendNote").textContent = message.error; setFilesSendBusy(false); return; }
+  if (message.truncated) {
+    $("#filesSendNote").textContent = "This file is larger than the 8 MiB transfer limit; refusing to send a truncated copy.";
+    setFilesSendBusy(false);
+    return;
+  }
+  const targetId = $("#filesSendTarget").value;
+  const destination = $("#filesSendDestination").value.trim();
+  const targetName = state.devices.find((device) => device.id === targetId)?.display_name
+    || state.devices.find((device) => device.id === targetId)?.hostname || "the target device";
+  $("#filesSendNote").textContent = `Sending to ${targetName}…`;
+  sendFileToDevice(targetId, destination, message.data, targetName);
+}
+
+// A short-lived, write-only files-live connection to the TARGET device --
+// separate from state.filesSocket (which stays connected to the device
+// currently being browsed, the SOURCE). Opening it only for the duration
+// of this one write keeps it out of the way of an admin who might also
+// have the target device's own Files tab open elsewhere; the server's
+// one-viewer-per-device limit (see live.rs's claim_files) would otherwise
+// make the two connections fight over the same slot.
+function sendFileToDevice(targetDeviceId, destination, base64Data, targetName) {
+  let settled = false;
+  const finish = (message, isError) => {
+    if (settled) return;
+    settled = true;
+    transfer.close();
+    setFilesSendBusy(false);
+    if (isError) { $("#filesSendNote").textContent = message; return; }
+    showNotice(message);
+    closeFilesSendDialog();
+  };
+  const transfer = connectLiveSocket(`/api/v1/admin/devices/${targetDeviceId}/files-live`, {
+    shouldReconnect: () => false,
+    onOpen: () => transfer.send({ type: "write", path: destination, data: base64Data }),
+    onClose: () => finish(`Lost connection to ${targetName} before the transfer finished.`, true),
+    onMessage: (message) => {
+      if (message.type === "files_write_result") {
+        if (message.error) finish(message.error, true);
+        else finish(`Sent to ${targetName}: ${message.path}.`, false);
+      } else if (message.type === "error") {
+        finish(message.reason || `${targetName} rejected the connection.`, true);
+      }
+    },
+  });
 }
 
 function handleFilesWriteResult(message) {
@@ -3363,7 +3458,9 @@ $("#detailFiles").addEventListener("click", (event) => {
   const download = event.target.closest("[data-files-download]");
   if (download) { state.filesEditingPath = null; state.filesSocket?.send({ type: "read", path: download.dataset.filesDownload }); return; }
   const edit = event.target.closest("[data-files-edit]");
-  if (edit) { openFilesEditor(edit.dataset.filesEdit); }
+  if (edit) { openFilesEditor(edit.dataset.filesEdit); return; }
+  const send = event.target.closest("[data-files-send]");
+  if (send) { openFilesSendDialog(send.dataset.filesSend); }
 });
 
 $("#filesUploadButton").addEventListener("click", () => $("#filesUploadInput").click());
@@ -3382,6 +3479,28 @@ $("#filesEditForm").addEventListener("submit", (event) => {
 $("#closeFilesEdit").addEventListener("click", closeFilesEditor);
 $("#cancelFilesEdit").addEventListener("click", closeFilesEditor);
 $("#filesEditDialog").addEventListener("close", () => { state.filesEditingPath = null; });
+
+$("#filesSendForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if ($("#sendFilesSend").disabled || !state.filesSendSourcePath) return;
+  const destination = $("#filesSendDestination").value.trim();
+  if (!destination) { $("#filesSendNote").textContent = "Enter a destination path."; return; }
+  setFilesSendBusy(true);
+  $("#filesSendNote").textContent = "Reading from this device…";
+  state.filesSendingPath = state.filesSendSourcePath;
+  const sent = state.filesSocket?.send({ type: "read", path: state.filesSendSourcePath });
+  if (!sent) {
+    state.filesSendingPath = null;
+    setFilesSendBusy(false);
+    $("#filesSendNote").textContent = "Not connected to the source device right now -- reopen the Files tab and try again.";
+  }
+});
+$("#closeFilesSend").addEventListener("click", closeFilesSendDialog);
+$("#cancelFilesSend").addEventListener("click", closeFilesSendDialog);
+// Escape triggers <dialog>'s native cancel/close regardless of the button
+// disabled states above -- block it the same way while a transfer is busy.
+$("#filesSendDialog").addEventListener("cancel", (event) => { if ($("#sendFilesSend").disabled) event.preventDefault(); });
+$("#filesSendDialog").addEventListener("close", () => { state.filesSendSourcePath = null; state.filesSendingPath = null; });
 
 $("#deviceDialog").addEventListener("click", async (event) => {
   const button = event.target.closest("#wakeDeviceButton");
