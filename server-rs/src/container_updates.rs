@@ -267,8 +267,17 @@ async fn sweep_container_updates(pool: &sqlx::PgPool) {
 }
 
 pub async fn container_update_sweep_loop(pool: sqlx::PgPool) {
+    // Unlike compliance_snapshot_sweep_loop (also runs immediately on
+    // startup, but only ever upserts rows, never queues anything), this
+    // sweep queues real jobs -- running it the instant the process starts
+    // would fire a burst of UPDATE_CONTAINER jobs on every server restart
+    // or deploy, with no chance for an admin to review the current
+    // policies first. Sleeping first means a short-lived process (every
+    // integration test spawns the real binary -- see tests/common/mod.rs)
+    // never sweeps at all, and a long-running one waits one full interval
+    // before its first sweep, same as any other scheduled maintenance task.
     loop {
-        sweep_container_updates(&pool).await;
         tokio::time::sleep(std::time::Duration::from_secs(container_update_sweep_interval_seconds())).await;
+        sweep_container_updates(&pool).await;
     }
 }
