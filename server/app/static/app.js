@@ -47,6 +47,8 @@ const state = {
   topConsumersSort: "cpu_percent",
   topConsumersSortDir: "desc",
   expandedGPUProcesses: new Set(),
+  containerUpdates: { default_mode: "manual", images: [] },
+  editingContainerPolicyImage: null,
 };
 
 const ACCENT_PRESETS = [
@@ -1306,6 +1308,103 @@ function renderPatching() {
         <p class="scan-note">Patch scan: ${relativeTime(device.last_scan_at)} · Vulnerability scan: ${relativeTime(device.last_vulnerability_scan_at)}</p>
       </article>`;
   }).join("") : '<div class="empty">No devices have enrolled.</div>';
+  renderContainerUpdatesSummary();
+}
+
+function renderContainerUpdatesSummary() {
+  const el = $("#containerUpdatesSummary");
+  if (!el) return;
+  const images = state.containerUpdates.images || [];
+  if (!images.length) { el.textContent = "No Docker containers reported by any device yet."; return; }
+  const automatic = images.filter((image) => image.mode === "automatic").length;
+  const updatesAvailable = images.filter((image) => image.any_update_available).length;
+  el.textContent = `${images.length} image${images.length === 1 ? "" : "s"} across the fleet -- ${automatic} automatic, `
+    + `${images.length - automatic} manual${updatesAvailable ? `, ${updatesAvailable} with an update available` : ""}.`;
+}
+
+async function loadContainerUpdates() {
+  try { state.containerUpdates = await api("/api/v1/admin/container-updates"); }
+  catch (error) { showNotice(error.message, true); }
+}
+
+function containerStatusLabel(image) {
+  const anyChecked = image.devices.some((d) => d.update_checked_at);
+  if (image.any_update_available) return "Update available";
+  return anyChecked ? "Up to date" : "Unknown (not checked yet)";
+}
+
+function renderContainerUpdatesTable() {
+  const images = state.containerUpdates.images || [];
+  $("#containerUpdatesTable").innerHTML = images.length ? images.map((image) => {
+    const eligible = image.devices.filter((d) => !d.excluded);
+    const excludedCount = image.devices.length - eligible.length;
+    const devicesLabel = `${eligible.length} device${eligible.length === 1 ? "" : "s"}`
+      + (excludedCount ? `, ${excludedCount} excluded` : "");
+    const deviceTitle = image.devices.map((d) => `${d.hostname}${d.excluded ? " (excluded)" : ""}`).join(", ");
+    return `
+      <tr data-image="${escapeHtml(image.image_name)}">
+        <td><code>${escapeHtml(image.image_name)}</code></td>
+        <td>${image.mode === "automatic" ? "Automatic" : "Manual"}${image.has_override ? "" : " (default)"}</td>
+        <td title="${escapeHtml(deviceTitle)}">${escapeHtml(devicesLabel)}</td>
+        <td>${escapeHtml(containerStatusLabel(image))}</td>
+        <td>
+          <button type="button" class="secondary" data-container-check="${escapeHtml(image.image_name)}" ${eligible.length ? "" : "disabled"}>Check</button>
+          <button type="button" class="secondary" data-container-apply="${escapeHtml(image.image_name)}" ${eligible.length ? "" : "disabled"}>Update</button>
+          <button type="button" class="secondary" data-container-edit="${escapeHtml(image.image_name)}">Edit policy</button>
+        </td>
+      </tr>`;
+  }).join("") : '<tr><td colspan="5" class="empty">No Docker containers reported yet.</td></tr>';
+}
+
+async function openContainerUpdatesDialog() {
+  await loadContainerUpdates();
+  $("#containerUpdatesDefaultMode").value = state.containerUpdates.default_mode || "manual";
+  renderContainerUpdatesTable();
+  renderContainerUpdatesSummary();
+  $("#containerUpdatesDialog").showModal();
+}
+
+async function queueContainerUpdateJobs(imageName, action) {
+  const image = (state.containerUpdates.images || []).find((item) => item.image_name === imageName);
+  if (!image) return;
+  const targets = image.devices.filter((d) => !d.excluded && d.container_id);
+  if (!targets.length) { showNotice("No eligible devices for this image.", true); return; }
+  if (action === "apply" && !confirm(`Update ${targets.length} container(s) running ${imageName} now? Each one stops, recreates with the latest pulled image, and starts back up.`)) return;
+  let failures = 0;
+  await Promise.all(targets.map(async (target) => {
+    const options = { container_id: target.container_id, action };
+    if (action === "apply") options.confirmed = true;
+    try {
+      await api(`/api/v1/admin/devices/${target.device_id}/jobs`, { method: "POST", body: JSON.stringify({ type: "UPDATE_CONTAINER", options }) });
+    } catch {
+      failures++; // most likely an UPDATE_CONTAINER job is already pending/running on that device
+    }
+  }));
+  showNotice(failures
+    ? `Queued ${action} for ${targets.length - failures}/${targets.length} device(s); ${failures} already had a container-update job pending.`
+    : `Queued ${action} for ${targets.length} device(s).`);
+  await loadContainerUpdates();
+  renderContainerUpdatesTable();
+  renderContainerUpdatesSummary();
+}
+
+function openContainerPolicyDialog(imageName) {
+  const image = (state.containerUpdates.images || []).find((item) => item.image_name === imageName);
+  if (!image) return;
+  state.editingContainerPolicyImage = imageName;
+  $("#containerPolicyImage").textContent = imageName;
+  $("#containerPolicyMode").value = image.mode;
+  $("#resetContainerPolicy").hidden = !image.has_override;
+  $("#containerPolicyDevices").innerHTML = image.devices.length
+    ? image.devices.map((d) => `
+        <label><input type="checkbox" value="${escapeHtml(d.device_id)}" ${d.excluded ? "" : "checked"}> ${escapeHtml(d.hostname)}${d.container_name ? ` (${escapeHtml(d.container_name)})` : ""}</label>`).join("")
+    : "<p class=\"form-note\">No devices currently run this image.</p>";
+  $("#containerPolicyDialog").showModal();
+}
+
+function closeContainerPolicyDialog() {
+  state.editingContainerPolicyImage = null;
+  $("#containerPolicyDialog").close();
 }
 
 // All distinct tags currently in use across the fleet, for the filter
@@ -2767,9 +2866,10 @@ async function refresh() {
       state.user.role === "admin" ? api("/api/v1/admin/notification-channels").catch(() => []) : Promise.resolve([]),
       state.user.role === "admin" ? api("/api/v1/admin/alert-rules").catch(() => []) : Promise.resolve([]),
       state.user.role === "admin" ? api("/api/v1/admin/scripts").catch(() => []) : Promise.resolve([]),
+      api("/api/v1/admin/container-updates").catch(() => ({ default_mode: "manual", images: [] })),
     ]);
     if (!state.user || generation !== state.authGeneration) return;
-    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion, state.integrations, state.notificationChannels, state.alertRules, state.scripts] = results;
+    [state.devices, state.jobs, state.enrollmentTokens, state.reportHistory, state.fleetSettings, state.packages, state.customPackages, state.publishedAgentVersion, state.integrations, state.notificationChannels, state.alertRules, state.scripts, state.containerUpdates] = results;
     showNotice(state.devices.length ? "Fleet data is current." : "Server is ready. Enroll the first agent to populate the fleet.");
     $("#refreshState").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     render();
@@ -3501,6 +3601,67 @@ $("#cancelFilesSend").addEventListener("click", closeFilesSendDialog);
 // disabled states above -- block it the same way while a transfer is busy.
 $("#filesSendDialog").addEventListener("cancel", (event) => { if ($("#sendFilesSend").disabled) event.preventDefault(); });
 $("#filesSendDialog").addEventListener("close", () => { state.filesSendSourcePath = null; state.filesSendingPath = null; });
+
+$("#openContainerUpdates").addEventListener("click", openContainerUpdatesDialog);
+$("#closeContainerUpdates").addEventListener("click", () => $("#containerUpdatesDialog").close());
+
+$("#containerUpdatesDefaultForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/v1/admin/container-updates/policy/*", {
+      method: "PUT", body: JSON.stringify({ mode: $("#containerUpdatesDefaultMode").value, excluded_device_ids: [] }),
+    });
+    showNotice("Default container update policy saved.");
+    await loadContainerUpdates();
+    renderContainerUpdatesTable();
+    renderContainerUpdatesSummary();
+  } catch (error) { showNotice(error.message, true); }
+});
+
+$("#containerUpdatesTable").addEventListener("click", (event) => {
+  const check = event.target.closest("[data-container-check]");
+  if (check) { queueContainerUpdateJobs(check.dataset.containerCheck, "check"); return; }
+  const apply = event.target.closest("[data-container-apply]");
+  if (apply) { queueContainerUpdateJobs(apply.dataset.containerApply, "apply"); return; }
+  const edit = event.target.closest("[data-container-edit]");
+  if (edit) { openContainerPolicyDialog(edit.dataset.containerEdit); }
+});
+
+$("#closeContainerPolicy").addEventListener("click", closeContainerPolicyDialog);
+$("#cancelContainerPolicy").addEventListener("click", closeContainerPolicyDialog);
+$("#containerPolicyDialog").addEventListener("close", () => { state.editingContainerPolicyImage = null; });
+
+$("#resetContainerPolicy").addEventListener("click", async () => {
+  const imageName = state.editingContainerPolicyImage;
+  if (!imageName) return;
+  try {
+    await api(`/api/v1/admin/container-updates/policy/${encodeURIComponent(imageName)}`, { method: "DELETE" });
+    showNotice(`Reverted ${imageName} to the fleet-wide default.`);
+    closeContainerPolicyDialog();
+    await loadContainerUpdates();
+    renderContainerUpdatesTable();
+    renderContainerUpdatesSummary();
+  } catch (error) { showNotice(error.message, true); }
+});
+
+$("#containerPolicyForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const imageName = state.editingContainerPolicyImage;
+  if (!imageName) return;
+  const excludedDeviceIds = Array.from($("#containerPolicyDevices").querySelectorAll('input[type="checkbox"]'))
+    .filter((input) => !input.checked)
+    .map((input) => input.value);
+  try {
+    await api(`/api/v1/admin/container-updates/policy/${encodeURIComponent(imageName)}`, {
+      method: "PUT", body: JSON.stringify({ mode: $("#containerPolicyMode").value, excluded_device_ids: excludedDeviceIds }),
+    });
+    showNotice(`Saved the update policy for ${imageName}.`);
+    closeContainerPolicyDialog();
+    await loadContainerUpdates();
+    renderContainerUpdatesTable();
+    renderContainerUpdatesSummary();
+  } catch (error) { showNotice(error.message, true); }
+});
 
 $("#deviceDialog").addEventListener("click", async (event) => {
   const button = event.target.closest("#wakeDeviceButton");

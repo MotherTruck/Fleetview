@@ -25,6 +25,31 @@ type Container struct {
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 	Ports     []Port `json:"ports"`
+	// Populated from the in-memory cache CheckForUpdate/ApplyUpdate leaves
+	// behind (see update.go) -- never checked as part of an ordinary
+	// inventory scan itself, since pulling every image on every scan would
+	// be far too expensive to do on the regular scan interval. Omitted
+	// entirely (rather than a default false/empty) until this container has
+	// actually been checked at least once, so the server/dashboard can tell
+	// "known up to date" apart from "never checked".
+	UpdateAvailable *bool  `json:"update_available,omitempty"`
+	UpdateCheckedAt string `json:"update_checked_at,omitempty"`
+}
+
+// withUpdateStatus merges any cached update-check result for item.ID into
+// item's two update_available/update_checked_at fields -- called by each
+// platform's Collect() so the status survives into the very next ordinary
+// inventory report after a check, not just the job result of the check
+// itself.
+func withUpdateStatus(item Container) Container {
+	status, ok := cachedUpdateStatus(item.ID)
+	if !ok {
+		return item
+	}
+	available := status.Available
+	item.UpdateAvailable = &available
+	item.UpdateCheckedAt = status.CheckedAt.Format(time.RFC3339)
+	return item
 }
 
 type dockerStatsCPU struct {

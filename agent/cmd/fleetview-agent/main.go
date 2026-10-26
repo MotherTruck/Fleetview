@@ -27,7 +27,7 @@ import (
 // version is overridable at build time via -ldflags "-X main.version=...",
 // which the server's Docker image build uses so published agent binaries
 // self-report the exact version they were built as.
-var version = "0.31.1"
+var version = "0.32.0"
 
 const serviceName = "fleetview-agent"
 
@@ -310,6 +310,39 @@ func handleNextJob(ctx context.Context, api *client.Client, manager packages.Man
 			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
 				logger.Printf("post-Docker-action scan failed: %v", scanErr)
 			}
+		}
+	case "UPDATE_CONTAINER":
+		if !dockerInventoryEnabled {
+			err = fmt.Errorf("Docker inventory and management are disabled for this device")
+			break
+		}
+		id, _ := job.Options["container_id"].(string)
+		action, _ := job.Options["action"].(string)
+		switch action {
+		case "check":
+			var status containers.UpdateStatus
+			status, err = containers.CheckForUpdate(ctx, id)
+			if err == nil {
+				if status.Available {
+					result.Output = fmt.Sprintf("Update available (now running %s)", status.LatestID)
+				} else {
+					result.Output = "Already up to date"
+				}
+				if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+					logger.Printf("post-check scan failed: %v", scanErr)
+				}
+			}
+		case "apply":
+			if job.Options["confirmed"] != true {
+				err = fmt.Errorf("Docker container update requires confirmation")
+				break
+			}
+			result.Output, err = containers.ApplyUpdate(ctx, id)
+			if scanErr := scanAndReport(ctx, api, manager, dockerInventoryEnabled); scanErr != nil {
+				logger.Printf("post-update scan failed: %v", scanErr)
+			}
+		default:
+			err = fmt.Errorf("unknown UPDATE_CONTAINER action %q", action)
 		}
 	case "DOCKER_COMPOSE_UP":
 		if !dockerInventoryEnabled {

@@ -64,10 +64,10 @@ func Collect(ctx context.Context) (bool, []Container, error) {
 		for _, port := range item.Ports {
 			ports = append(ports, Port{PrivatePort: port.PrivatePort, PublicPort: port.PublicPort, Type: port.Type, IP: port.IP})
 		}
-		result = append(result, Container{
+		result = append(result, withUpdateStatus(Container{
 			ID: identifier, Name: name, Image: item.Image, State: item.State,
 			Status: item.Status, CreatedAt: time.Unix(item.Created, 0).UTC().Format(time.RFC3339), Ports: ports,
-		})
+		}))
 	}
 	return true, result, nil
 }

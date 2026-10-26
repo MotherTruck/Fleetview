@@ -1461,6 +1461,7 @@ const ALLOWED_JOB_TYPES: &[&str] = &[
     "DOCKER_COMPOSE_UP",
     "DOCKER_VOLUME_REMOVE",
     "DOCKER_VOLUME_PRUNE",
+    "UPDATE_CONTAINER",
 ];
 
 // Mirrors deployment.rs/live.rs's own private copy of this same check --
@@ -1478,6 +1479,13 @@ fn version_at_least(version: Option<&str>, required: (i32, i32)) -> bool {
 
 fn supports_docker_compose_up(device: &Device) -> bool {
     version_at_least(device.agent_version.as_deref(), (0, 29))
+}
+
+/// Used by container_updates.rs's sweep loop to skip a device whose agent
+/// predates UPDATE_CONTAINER -- the same version floor create_job's own
+/// UPDATE_CONTAINER validation block enforces for a manually-triggered one.
+pub(crate) fn supports_update_container(device: &Device) -> bool {
+    version_at_least(device.agent_version.as_deref(), (0, 32))
 }
 
 // docker compose's own project-name rule: lowercase alphanumerics, '-' and
@@ -1596,6 +1604,49 @@ async fn create_job(
                 list.iter()
                     .any(|item| item.get("id").and_then(Value::as_str) == container_id)
             })
+            .unwrap_or(false);
+        if !docker_available || !container_known {
+            return Err(ApiError::bad_request(
+                "Container is not in this device's latest Docker inventory",
+            ));
+        }
+    }
+    if payload.job_type == "UPDATE_CONTAINER" {
+        let version_ok = device
+            .agent_version
+            .as_deref()
+            .unwrap_or("")
+            .split('.')
+            .take(2)
+            .map(|p| p.parse::<i32>().unwrap_or(-1))
+            .collect::<Vec<_>>();
+        let supported = matches!(version_ok.as_slice(), [major, minor] if (*major, *minor) >= (0, 32));
+        if !supported {
+            return Err(ApiError::bad_request(
+                "Upgrade this device's native agent to 0.32.0 before managing container updates",
+            ));
+        }
+        let action = payload.options.get("action").and_then(Value::as_str);
+        let container_id = payload.options.get("container_id").and_then(Value::as_str);
+        let id_ok = container_id
+            .map(|id| id.len() >= 12 && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit()))
+            .unwrap_or(false);
+        // "check" (pull + compare, no change made) needs no confirmation,
+        // same as a plain patch scan, and so takes only {container_id,
+        // action}; "apply" (stop/recreate/start) does, same as every other
+        // job that actually changes something running, and so takes a
+        // third {confirmed: true}.
+        let expected_options_len = if action == Some("apply") { 3 } else { 2 };
+        let confirmed_if_needed = action != Some("apply") || payload.options.get("confirmed") == Some(&Value::Bool(true));
+        if !id_ok || !matches!(action, Some("check") | Some("apply")) || !confirmed_if_needed || payload.options.len() != expected_options_len {
+            return Err(ApiError::bad_request(
+                "A container ID and action (check, or a confirmed apply) are required",
+            ));
+        }
+        let known = device.inventory.get("docker_containers").and_then(Value::as_array);
+        let docker_available = device.inventory.get("docker_available") == Some(&Value::Bool(true));
+        let container_known = known
+            .map(|list| list.iter().any(|item| item.get("id").and_then(Value::as_str) == container_id))
             .unwrap_or(false);
         if !docker_available || !container_known {
             return Err(ApiError::bad_request(

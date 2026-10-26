@@ -109,6 +109,14 @@
           <div id="patchDevices" class="devices"></div>
         </section>
 
+        <section class="panel" data-admin-only>
+          <div class="panel-heading">
+            <div><p class="eyebrow">PATCHING</p><h2>Container updates</h2></div>
+            <button type="button" id="openContainerUpdates" class="secondary">Manage</button>
+          </div>
+          <p id="containerUpdatesSummary" class="form-note">Loading…</p>
+        </section>
+
         <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Recent jobs</h2></div></div>
           <div class="table-wrap">
@@ -867,6 +875,66 @@ FLEETVIEW_PORT=8080</code></pre>
         <div class="dialog-actions">
           <button id="cancelFilesSend" type="button" class="secondary">Cancel</button>
           <button id="sendFilesSend" type="submit">Send</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="containerUpdatesDialog" class="device-dialog container-updates-dialog">
+      <div class="detail-header">
+        <div>
+          <p class="eyebrow">PATCHING</p>
+          <h2>Container update policies</h2>
+        </div>
+        <div class="detail-header-actions">
+          <button id="closeContainerUpdates" type="button" class="icon-button secondary" aria-label="Close">×</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <p class="form-note">
+          Each distinct image appears once even if several devices run it. Automatic images are pulled and
+          recreated in place on the sweep interval; manual images are only checked, and updated when you choose to.
+        </p>
+        <form id="containerUpdatesDefaultForm" class="inline-form">
+          <label>Fleet-wide default for any image without its own policy
+            <select id="containerUpdatesDefaultMode">
+              <option value="manual">Manual (check only)</option>
+              <option value="automatic">Automatic</option>
+            </select>
+          </label>
+          <button type="submit" class="secondary">Save default</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Image</th><th>Mode</th><th>Devices</th><th>Status</th><th></th></tr></thead>
+            <tbody id="containerUpdatesTable"><tr><td colspan="5" class="empty">No Docker containers reported yet.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="containerPolicyDialog" class="device-dialog">
+      <form id="containerPolicyForm" class="files-edit-form">
+        <div class="detail-header">
+          <div>
+            <p class="eyebrow">CONTAINER UPDATES</p>
+            <h2 id="containerPolicyImage">Edit policy</h2>
+          </div>
+          <div class="detail-header-actions">
+            <button id="closeContainerPolicy" type="button" class="icon-button secondary" aria-label="Close">×</button>
+          </div>
+        </div>
+        <label>Mode
+          <select id="containerPolicyMode">
+            <option value="manual">Manual (check only)</option>
+            <option value="automatic">Automatic</option>
+          </select>
+        </label>
+        <p class="form-note">Unchecking a device excludes it from this image's updates entirely, whether the mode is automatic or manual.</p>
+        <div id="containerPolicyDevices" class="checkbox-list"></div>
+        <div class="dialog-actions">
+          <button id="resetContainerPolicy" type="button" class="secondary">Reset to default</button>
+          <button id="cancelContainerPolicy" type="button" class="secondary">Cancel</button>
+          <button id="saveContainerPolicy" type="submit">Save</button>
         </div>
       </form>
     </dialog>

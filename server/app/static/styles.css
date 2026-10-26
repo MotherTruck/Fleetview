@@ -171,6 +171,17 @@ dialog label, .modal-panel label { display: grid; gap: 8px; color: var(--soft); 
 .modal-overlay[hidden] { display: none; }
 .dialog-actions { display: flex; justify-content: end; gap: 8px; margin-top: 20px; }
 .device-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100vh - 40px); padding: 0; overflow: hidden; }
+/* Unlike filesEditDialog/filesSendDialog, this dialog's content isn't a
+   single flex-grown, internally-scrolling form -- it's a static intro
+   paragraph, a form, and a table that can genuinely run long (one row per
+   distinct image across the whole fleet), so the dialog itself needs to
+   scroll instead of inheriting .device-dialog's overflow: hidden, which
+   would otherwise just clip anything past the viewport. */
+.container-updates-dialog { overflow-y: auto; }
+.inline-form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.inline-form label { flex: 1; min-width: 220px; }
+.checkbox-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; padding: 10px; margin: 10px 0; border: 1px solid var(--border); border-radius: 9px; background: var(--raised); }
+.checkbox-list label { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 /* Device details is its own page (data-page-panel="device-detail"), not a
    dialog -- the top nav stays visible and clicking Inventory again returns
    to the device list, rather than a takeover that hides everything else.

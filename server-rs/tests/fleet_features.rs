@@ -255,3 +255,124 @@ async fn legacy_admin_token_agent_poll_and_validation() {
     let empty = agent.get(server.url("/api/v1/agent/jobs/next")).header("X-Device-Id", "one").header("Authorization", "Bearer agent-test").send().await.unwrap();
     assert_eq!(empty.status(), 204);
 }
+
+#[tokio::test]
+async fn update_container_requires_known_container_version_and_confirmation() {
+    let server = TestServer::start().await;
+    let container_id = "abcdef012345";
+    server
+        .seed_device_full(
+            "one", "debian", "linux", "apt", "0.32.0", "unused",
+            json!([]),
+            json!({"docker_available": true, "docker_containers": [{"id": container_id, "image": "nginx:latest"}]}),
+            None,
+        )
+        .await;
+    let (client, csrf) = setup_admin(&server).await;
+
+    // "check" is non-destructive and needs no confirmation -- exactly
+    // {container_id, action}, nothing more.
+    let check = create_job(&client, &server, &csrf, "one", "UPDATE_CONTAINER", json!({"action": "check", "container_id": container_id})).await;
+    assert_eq!(check.status(), 201, "{}", check.text().await.unwrap());
+
+    for invalid in [
+        json!({"action": "apply", "container_id": container_id}), // apply without confirmed
+        json!({"action": "bogus", "container_id": container_id, "confirmed": true}),
+        json!({"action": "check", "container_id": "different-id"}),
+        json!({"action": "check", "container_id": container_id, "confirmed": true}), // check doesn't take confirmed
+    ] {
+        let response = create_job(&client, &server, &csrf, "one", "UPDATE_CONTAINER", invalid.clone()).await;
+        assert_eq!(response.status(), 400, "options {invalid} should be rejected");
+    }
+
+    let apply = create_job(&client, &server, &csrf, "one", "UPDATE_CONTAINER", json!({"action": "apply", "container_id": container_id, "confirmed": true})).await;
+    assert_eq!(apply.status(), 409, "the pending check job should block a second UPDATE_CONTAINER job on the same device");
+}
+
+#[tokio::test]
+async fn update_container_rejected_below_version_gate() {
+    let server = TestServer::start().await;
+    let container_id = "abcdef012345";
+    server
+        .seed_device_full(
+            "one", "debian", "linux", "apt", "0.31.1", "unused",
+            json!([]),
+            json!({"docker_available": true, "docker_containers": [{"id": container_id, "image": "nginx:latest"}]}),
+            None,
+        )
+        .await;
+    let (client, csrf) = setup_admin(&server).await;
+    let response = create_job(&client, &server, &csrf, "one", "UPDATE_CONTAINER", json!({"action": "check", "container_id": container_id})).await;
+    assert_eq!(response.status(), 400, "an agent below 0.32.0 must be rejected");
+}
+
+#[tokio::test]
+async fn container_updates_dedupes_by_image_across_devices() {
+    let server = TestServer::start().await;
+    server
+        .seed_device_full(
+            "one", "host-one", "linux", "apt", "0.32.0", "unused",
+            json!([]),
+            json!({"docker_available": true, "docker_containers": [
+                {"id": "aaaaaaaaaaaa", "name": "web1", "image": "nginx:latest", "state": "running"},
+            ]}),
+            None,
+        )
+        .await;
+    server
+        .seed_device_full(
+            "two", "host-two", "linux", "apt", "0.32.0", "unused2",
+            json!([]),
+            json!({"docker_available": true, "docker_containers": [
+                {"id": "bbbbbbbbbbbb", "name": "web2", "image": "nginx:latest", "state": "running"},
+                {"id": "cccccccccccc", "name": "db", "image": "postgres:17", "state": "running"},
+            ]}),
+            None,
+        )
+        .await;
+    let (client, csrf) = setup_admin(&server).await;
+
+    let list: Value = client.get(server.url("/api/v1/admin/container-updates")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list["default_mode"], "manual");
+    let images = list["images"].as_array().unwrap();
+    assert_eq!(images.len(), 2, "nginx:latest from two devices must collapse into one entry");
+    let nginx = images.iter().find(|i| i["image_name"] == "nginx:latest").unwrap();
+    assert_eq!(nginx["devices"].as_array().unwrap().len(), 2);
+    assert_eq!(nginx["mode"], "manual");
+    assert_eq!(nginx["has_override"], false);
+
+    // Set a per-image override excluding device "two", and confirm it shows
+    // up both on the policy itself and as each affected device's "excluded".
+    let set = client
+        .put(server.url("/api/v1/admin/container-updates/policy/nginx%3Alatest"))
+        .header("X-CSRF-Token", &csrf)
+        .json(&json!({"mode": "automatic", "excluded_device_ids": ["two"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(set.status(), 200, "{}", set.text().await.unwrap());
+
+    let list: Value = client.get(server.url("/api/v1/admin/container-updates")).send().await.unwrap().json().await.unwrap();
+    let nginx = list["images"].as_array().unwrap().iter().find(|i| i["image_name"] == "nginx:latest").unwrap();
+    assert_eq!(nginx["mode"], "automatic");
+    assert_eq!(nginx["has_override"], true);
+    for device_entry in nginx["devices"].as_array().unwrap() {
+        let expect_excluded = device_entry["device_id"] == "two";
+        assert_eq!(device_entry["excluded"], expect_excluded, "{device_entry}");
+    }
+
+    let delete = client.delete(server.url("/api/v1/admin/container-updates/policy/nginx%3Alatest")).header("X-CSRF-Token", &csrf).send().await.unwrap();
+    assert_eq!(delete.status(), 204);
+    let list: Value = client.get(server.url("/api/v1/admin/container-updates")).send().await.unwrap().json().await.unwrap();
+    let nginx = list["images"].as_array().unwrap().iter().find(|i| i["image_name"] == "nginx:latest").unwrap();
+    assert_eq!(nginx["mode"], "manual", "deleting the override should revert to the fleet-wide default");
+}
+
+#[tokio::test]
+async fn container_update_default_policy_cannot_be_deleted() {
+    let server = TestServer::start().await;
+    server.seed_device_full("one", "host", "linux", "apt", "0.32.0", "unused", json!([]), json!({}), None).await;
+    let (client, csrf) = setup_admin(&server).await;
+    let response = client.delete(server.url("/api/v1/admin/container-updates/policy/*")).header("X-CSRF-Token", &csrf).send().await.unwrap();
+    assert_eq!(response.status(), 400);
+}

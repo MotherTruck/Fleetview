@@ -2,6 +2,7 @@ mod accounts;
 mod alerting;
 mod auth;
 mod connectors;
+mod container_updates;
 mod cve_enrichment;
 mod db;
 mod deployment;
@@ -58,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(alerting::evaluate_loop(pool.clone()));
     tokio::spawn(devices::reap_stale_jobs_loop(pool.clone()));
     tokio::spawn(devices::compliance_snapshot_sweep_loop(pool.clone()));
+    tokio::spawn(container_updates::container_update_sweep_loop(pool.clone()));
     let state = Arc::new(AppState { db: pool, hub: live::LiveHub::new() });
 
     let static_dir = std::env::var("FLEETVIEW_STATIC_DIR").unwrap_or_else(|_| "static".to_string());
@@ -75,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(integrations::router())
         .merge(migration::router())
         .merge(scripts::router())
+        .merge(container_updates::router())
         .with_state(state)
         .route_service("/", ServeFile::new(index_path))
         .nest_service("/static", ServeDir::new(&static_dir))
