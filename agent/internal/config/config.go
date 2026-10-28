@@ -2,13 +2,17 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"fleetview-agent/internal/model"
 )
 
 type Config struct {
@@ -39,6 +43,23 @@ func isLoopbackPlaintextTarget(serverURL string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// alreadyEnrolled reports whether statePath holds a device ID and agent
+// token from a previous successful enrollment. Reads internal/model.State
+// directly rather than going through internal/client.LoadState: client
+// imports config, so config importing client back would be a cycle, and
+// model (just the plain struct, no I/O) has none of that problem.
+func alreadyEnrolled(statePath string) bool {
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return false
+	}
+	var state model.State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return false
+	}
+	return state.DeviceID != "" && state.AgentToken != ""
 }
 
 func Load(path string) (Config, error) {
@@ -104,12 +125,29 @@ func Load(path string) (Config, error) {
 	// no network hop for anything to observe.
 	if !result.AllowPlaintext && !isLoopbackPlaintextTarget(result.ServerURL) {
 		if parsed, err := url.Parse(result.ServerURL); err == nil && parsed.Scheme == "http" {
-			return Config{}, fmt.Errorf(
+			message := fmt.Sprintf(
 				"FLEETVIEW_SERVER_URL (%s) is plain HTTP to a non-local address -- this would send the agent's "+
 					"credentials and every job result in clear text. Use an https:// URL (see docs/TLS.md), or set "+
 					"FLEETVIEW_ALLOW_PLAINTEXT=true to proceed anyway if you understand the risk",
 				result.ServerURL,
 			)
+			if !alreadyEnrolled(result.StatePath) {
+				// A brand new enrollment is the one moment an admin is
+				// actually looking at this install and can make an
+				// informed choice -- refuse outright, same as always.
+				return Config{}, fmt.Errorf("%s", message)
+			}
+			// An already-enrolled device has been running this way,
+			// successfully, since before this check existed (or since
+			// whoever set it up last touched it). Hard-refusing here
+			// would crash-loop a previously-working fleet on its next
+			// routine restart -- reboot, a crash, a package update, an
+			// agent upgrade -- with nothing but a buried systemd journal
+			// entry to explain why every device just went offline at
+			// once. That silent outage is worse than the plaintext risk
+			// this check exists to catch, so an already-enrolled device
+			// is grandfathered in with a loud warning instead.
+			log.Printf("WARNING: %s (continuing anyway: this device was already enrolled before this check existed)", message)
 		}
 	}
 	return result, nil

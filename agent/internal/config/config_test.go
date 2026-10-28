@@ -58,6 +58,47 @@ func TestLoadRefusesPlaintextToNonLocalAddress(t *testing.T) {
 	}
 }
 
+func TestLoadGrandfathersAlreadyEnrolledPlaintextDevice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.env")
+	statePath := filepath.Join(dir, "state.json")
+	content := "FLEETVIEW_SERVER_URL=http://192.168.1.50:8080\nFLEETVIEW_STATE_PATH=" + statePath + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, []byte(`{"device_id":"abc","agent_token":"xyz"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected an already-enrolled device to be grandfathered in instead of refused, got: %v", err)
+	}
+	if cfg.ServerURL != "http://192.168.1.50:8080" {
+		t.Fatalf("ServerURL = %q", cfg.ServerURL)
+	}
+}
+
+func TestLoadStillRefusesPlaintextWithoutCompleteEnrollmentState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.env")
+	statePath := filepath.Join(dir, "state.json")
+	content := "FLEETVIEW_SERVER_URL=http://192.168.1.50:8080\nFLEETVIEW_STATE_PATH=" + statePath + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A state file exists but enrollment never actually finished (e.g. the
+	// agent crashed between writing it and completing enrollment) -- still
+	// treated as a fresh, never-enrolled device, so the hard refusal stands.
+	for _, stateContent := range []string{`{}`, `{"device_id":"abc"}`, `{"agent_token":"xyz"}`} {
+		if err := os.WriteFile(statePath, []byte(stateContent), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("expected Load to still refuse plaintext for incomplete state %q", stateContent)
+		}
+	}
+}
+
 func TestLoadAllowsPlaintextWithExplicitOptOut(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent.env")
 	content := "FLEETVIEW_SERVER_URL=http://192.168.1.50:8080\nFLEETVIEW_ALLOW_PLAINTEXT=true\n"
