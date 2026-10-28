@@ -1221,6 +1221,17 @@ function renderEnrollmentTokens() {
     </tr>`).join("") : '<tr><td colspan="6" class="empty">No enrollment tokens yet.</td></tr>';
 }
 
+// Surfaces config.Load's plaintext grandfather clause (agent-side,
+// internal/config/config.go) on the dashboard instead of leaving it only
+// in that device's own systemd journal -- see device.inventory.plaintext_warning,
+// set by the agent's own report when it's running over plain HTTP to a
+// non-local server only because it was already enrolled before that
+// refusal existed.
+function plaintextWarningNote(device) {
+  if (!device.inventory?.plaintext_warning) return "";
+  return '<p class="scan-note"><span class="pill severity-high">Unencrypted</span> Sending credentials over plain HTTP -- see docs/TLS.md to switch this device to HTTPS.</p>';
+}
+
 function renderDashboard() {
   const monitored = state.devices.filter((device) => device.metrics);
   const average = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -1231,7 +1242,7 @@ function renderDashboard() {
     const cpu = Number(metricValue(device, "cpu_percent", 0));
     const memory = usagePercent(metricValue(device, "memory_used_bytes"), metricValue(device, "memory_total_bytes")) || 0;
     const disk = usagePercent(metricValue(device, "disk_used_bytes"), metricValue(device, "disk_total_bytes")) || 0;
-    return !device.online || cpu >= 90 || memory >= 90 || disk >= 90;
+    return !device.online || cpu >= 90 || memory >= 90 || disk >= 90 || device.inventory?.plaintext_warning;
   }).length;
 
   $("#onlineDeviceCount").textContent = `${state.devices.filter((device) => device.online).length}/${state.devices.length}`;
@@ -1245,6 +1256,7 @@ function renderDashboard() {
     if (!metrics) {
       return `<article class="monitor-card waiting">
         <div class="device-top"><div><h3>${escapeHtml(device.display_name || device.hostname)}</h3><div class="device-subtitle">${escapeHtml(device.os_name || device.platform)}</div></div><div class="status ${device.online ? "online" : ""}"><span class="dot"></span>${device.online ? "Online" : "Offline"}</div></div>
+        ${plaintextWarningNote(device)}
         <div class="telemetry-wait">Waiting for the first telemetry sample from agent ${escapeHtml(device.agent_version || "")}. Samples arrive once per minute.</div>
       </article>`;
     }
@@ -1262,6 +1274,7 @@ function renderDashboard() {
         <div><span><small>Root disk</small><strong>${formatPercent(disk)}</strong></span>${usageBar(disk, disk >= 90 ? "orange" : "green")}</div>
       </div>
       <div class="live-secondary"><span>↓ ${formatRate(metrics.network_receive_bps)}</span><span>↑ ${formatRate(metrics.network_transmit_bps)}</span><span>CPU ${escapeHtml(temperature)}</span><span>${escapeHtml(gpuSummary)}</span><span>${metrics.process_count || 0} processes</span></div>
+      ${plaintextWarningNote(device)}
       <p class="scan-note">Sampled ${relativeTime(metrics.recorded_at)} · Select for history</p>
     </article>`;
   }).join("") : '<div class="empty">No devices have enrolled.</div>';

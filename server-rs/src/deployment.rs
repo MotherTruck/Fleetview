@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::auth::{authenticate_agent, Admin, Operator, Viewer};
@@ -114,16 +114,27 @@ fn supports_wake_on_lan(device: &Device) -> bool {
 
 // -- published agent manifest (read once, cached for the process lifetime) --
 
+// Only a successful read is cached -- a OnceLock<Option<Value>> initialized
+// on the first call would instead latch onto a miss just as permanently as
+// a hit: if that one call happened to land before the file was readable for
+// any reason (a slow/unusual mount, a permissions hiccup, a deployment that
+// genuinely doesn't bundle agent binaries yet at that moment), every
+// upgrade-agent/agent-version request for the rest of this process's life
+// would keep reporting "no published agent binaries", with no way to
+// recover short of restarting the server -- exactly the kind of silent,
+// hard-to-diagnose fleet-wide symptom (no Upgrade button ever appears,
+// manifest endpoint always empty) this project has already been bitten by
+// more than once tonight. The manifest's content is static for the life of
+// the image once it IS readable, so memoizing a hit is still safe and
+// avoids re-reading the file on every request.
 pub fn published_agent_manifest() -> Option<Value> {
-    static MANIFEST: OnceLock<Option<Value>> = OnceLock::new();
-    MANIFEST
-        .get_or_init(|| {
-            let path = install_dir().join("agent-bin").join("manifest.json");
-            std::fs::read_to_string(path)
-                .ok()
-                .and_then(|text| serde_json::from_str(&text).ok())
-        })
-        .clone()
+    static MANIFEST: Mutex<Option<Value>> = Mutex::new(None);
+    let mut cached = MANIFEST.lock().unwrap();
+    if cached.is_none() {
+        let path = install_dir().join("agent-bin").join("manifest.json");
+        *cached = std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok());
+    }
+    cached.clone()
 }
 
 async fn fetch_device(state: &AppState, id: &str) -> Result<Option<Device>, ApiError> {

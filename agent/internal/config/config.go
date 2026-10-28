@@ -26,6 +26,12 @@ type Config struct {
 	AllowInsecureTLS bool
 	AllowPlaintext   bool
 	CAFile           string
+	// PlaintextGrandfathered is set when this already-enrolled device was
+	// let through the plaintext refusal below rather than refused outright.
+	// Surfaced in the agent's own report (see buildReport in main.go) so
+	// this isn't just a line in a systemd journal nobody is watching --
+	// an admin sees it on the dashboard and can actually act on it.
+	PlaintextGrandfathered bool
 }
 
 // isLoopbackPlaintextTarget reports whether serverURL is plain http:// to a
@@ -148,6 +154,7 @@ func Load(path string) (Config, error) {
 			// this check exists to catch, so an already-enrolled device
 			// is grandfathered in with a loud warning instead.
 			log.Printf("WARNING: %s (continuing anyway: this device was already enrolled before this check existed)", message)
+			result.PlaintextGrandfathered = true
 		}
 	}
 	return result, nil

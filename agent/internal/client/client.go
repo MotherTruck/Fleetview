@@ -28,9 +28,10 @@ import (
 var ErrServerUnreachable = errors.New("could not reach the server")
 
 type Client struct {
-	baseURL string
-	http    *http.Client
-	state   model.State
+	baseURL                string
+	http                   *http.Client
+	state                  model.State
+	plaintextGrandfathered bool
 }
 
 // New builds the HTTP client the agent uses for every server request. TLS
@@ -57,8 +58,20 @@ func New(cfg config.Config, state model.State) (*Client, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfig
-	return &Client{baseURL: cfg.ServerURL, http: &http.Client{Timeout: cfg.RequestTimeout, Transport: transport}, state: state}, nil
+	return &Client{
+		baseURL:                cfg.ServerURL,
+		http:                   &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
+		state:                  state,
+		plaintextGrandfathered: cfg.PlaintextGrandfathered,
+	}, nil
 }
+
+// PlaintextGrandfathered reports whether this agent is running against a
+// plain-HTTP, non-local server only because it was already enrolled before
+// config.Load's refusal existed -- see buildReport in main.go, which
+// surfaces this in the agent's own report so it's visible on the
+// dashboard rather than only a line in this process's own log.
+func (c *Client) PlaintextGrandfathered() bool { return c.plaintextGrandfathered }
 
 // HTTPClient returns the *http.Client configured by New (including its TLS
 // setup: FLEETVIEW_CA_FILE pinning or FLEETVIEW_ALLOW_INSECURE_TLS), so the

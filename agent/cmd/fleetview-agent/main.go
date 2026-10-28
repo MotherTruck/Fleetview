@@ -245,10 +245,15 @@ func runAgent(ctx context.Context, configPath string, logger *log.Logger) error 
 	}
 }
 
-func buildReport(ctx context.Context, manager packages.Manager, dockerInventoryEnabled bool) (model.Report, error) {
+func buildReport(ctx context.Context, api *client.Client, manager packages.Manager, dockerInventoryEnabled bool) (model.Report, error) {
 	system, err := inventory.Collect(dockerInventoryEnabled)
 	if err != nil {
 		return model.Report{}, err
+	}
+	if api.PlaintextGrandfathered() {
+		// Otherwise this is only ever visible in this process's own log --
+		// see config.Load's grandfather clause and client.Client.PlaintextGrandfathered.
+		system.Details["plaintext_warning"] = true
 	}
 	installed, err := manager.Installed(ctx)
 	if err != nil {
@@ -262,7 +267,7 @@ func buildReport(ctx context.Context, manager packages.Manager, dockerInventoryE
 }
 
 func scanAndReport(ctx context.Context, api *client.Client, manager packages.Manager, dockerInventoryEnabled bool) error {
-	report, err := buildReport(ctx, manager, dockerInventoryEnabled)
+	report, err := buildReport(ctx, api, manager, dockerInventoryEnabled)
 	if err != nil {
 		return err
 	}
