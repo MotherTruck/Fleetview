@@ -566,6 +566,10 @@ function applyPermissions() {
   $("[data-page='agent']").hidden = role !== "admin";
   $("[data-page='integrations']").hidden = role !== "admin";
   $("[data-page='deploy']").hidden = role === "viewer" || !role;
+  // Not a role gate like the others above -- hidden whenever no enrolled
+  // device actually has Docker running, so the tab doesn't sit there
+  // empty for a fleet that has nothing Docker-related to show.
+  $("[data-page='docker']").hidden = !state.devices.some((device) => device.inventory?.docker_available);
   document.querySelectorAll("[data-admin-only]").forEach(node => node.hidden = role !== "admin");
   $("#removeDeviceButton").hidden = role !== "admin";
   $("#passwordButton").hidden = !state.user;
@@ -1278,6 +1282,33 @@ function renderDashboard() {
       <p class="scan-note">Sampled ${relativeTime(metrics.recorded_at)} · Select for history</p>
     </article>`;
   }).join("") : '<div class="empty">No devices have enrolled.</div>';
+}
+
+function renderDockerFleetTable() {
+  const table = $("#dockerFleetTable");
+  if (!table) return;
+  const rows = [];
+  for (const device of state.devices) {
+    const inventory = device.inventory || {};
+    if (!inventory.docker_available) continue;
+    const containers = Array.isArray(inventory.docker_containers) ? inventory.docker_containers : [];
+    const agentParts = String(device.agent_version || "").split(".").map(Number);
+    const agentReady = agentParts[0] > 0 || agentParts[0] === 0 && agentParts[1] >= 15;
+    const canManage = state.user?.role !== "viewer" && agentReady && device.agent_settings?.docker_inventory_enabled !== false;
+    for (const item of containers) {
+      const ports = Array.isArray(item.ports) ? item.ports.map((port) => {
+        const publicPort = port.public_port ?? port.PublicPort;
+        const privatePort = port.private_port ?? port.PrivatePort;
+        const protocol = port.type ?? port.Type;
+        const address = port.ip ?? port.IP;
+        return publicPort ? `${address || "0.0.0.0"}:${publicPort} → ${privatePort}/${protocol}` : `${privatePort}/${protocol}`;
+      }).join(", ") : "—";
+      const actions = ["running", "paused", "restarting"].includes(item.state) ? ["stop", "restart"] : ["start"];
+      const controls = canManage ? actions.map(action => `<button type="button" class="secondary" data-docker-action="${action}" data-container-id="${escapeHtml(item.id)}" data-device-id="${escapeHtml(device.id)}">${action[0].toUpperCase() + action.slice(1)}</button>`).join(" ") : "—";
+      rows.push(`<tr><td>${escapeHtml(device.display_name || device.hostname)}</td><td class="package-name">${escapeHtml(item.name || item.id)}</td><td><code>${escapeHtml(item.image)}</code></td><td><span class="pill ${item.state === "running" ? "succeeded" : "unknown"}">${escapeHtml(item.state)}</span></td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(ports || "—")}</td><td>${controls}</td></tr>`);
+    }
+  }
+  table.innerHTML = rows.length ? rows.join("") : '<tr><td colspan="7" class="empty">No containers reported yet.</td></tr>';
 }
 
 function renderPatching() {
@@ -2054,6 +2085,7 @@ async function deployPackage(deviceIds, packageName) {
 function render() {
   renderDashboard();
   renderPatching();
+  renderDockerFleetTable();
   renderInventory();
   renderDeploy();
   renderReports();
@@ -3041,6 +3073,23 @@ $("#detailTableBody").addEventListener("click", async event => {
     renderDeviceDetails();
     showNotice(current?.approved ? "Patch approval revoked." : "Patch approved for this version.");
   } catch (error) { button.disabled = false; showNotice(error.message, true); }
+});
+$("#dockerFleetTable").addEventListener("click", async event => {
+  const dockerButton = event.target.closest("[data-docker-action]");
+  if (!dockerButton) return;
+  const device = state.devices.find(item => item.id === dockerButton.dataset.deviceId);
+  if (!device || state.user?.role === "viewer") return;
+  const container = device.inventory?.docker_containers?.find(item => item.id === dockerButton.dataset.containerId);
+  const action = dockerButton.dataset.dockerAction;
+  if (!container || !["start", "stop", "restart"].includes(action)) return;
+  if (!confirm(`${action[0].toUpperCase() + action.slice(1)} Docker container ${container.name || container.id} on ${device.hostname}?\n\nStopping or restarting a service can interrupt users. If this is the FleetView server container, the dashboard will be unavailable until it starts again.`)) return;
+  dockerButton.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({type: "DOCKER_CONTAINER_ACTION", options: {action, container_id: container.id, confirmed: true}}),
+    });
+    showNotice(`Docker ${action} queued for ${container.name || container.id}. Check Jobs for the result.`);
+  } catch (error) { dockerButton.disabled = false; showNotice(error.message, true); }
 });
 $("#dockerVolumeRows").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-volume-remove]");

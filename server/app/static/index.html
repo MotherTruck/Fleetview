@@ -63,6 +63,7 @@
     <nav id="appTabs" class="app-tabs" aria-label="Primary navigation">
       <button class="app-tab active" data-page="dashboard">Dashboard</button>
       <button class="app-tab" data-page="patching">Patching</button>
+      <button class="app-tab" data-page="docker" hidden>Docker</button>
       <button class="app-tab" data-page="inventory">Inventory</button>
       <button class="app-tab" data-page="deploy">Deploy</button>
       <button class="app-tab" data-page="reports">Reports</button>
@@ -109,20 +110,35 @@
           <div id="patchDevices" class="devices"></div>
         </section>
 
-        <section class="panel" data-admin-only>
-          <div class="panel-heading">
-            <div><p class="eyebrow">PATCHING</p><h2>Container updates</h2></div>
-            <button type="button" id="openContainerUpdates" class="secondary">Manage</button>
-          </div>
-          <p id="containerUpdatesSummary" class="form-note">Loading…</p>
-        </section>
-
         <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">ACTIVITY</p><h2>Recent jobs</h2></div></div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Type</th><th>Device</th><th>Status</th><th>Created</th><th>Result</th></tr></thead>
               <tbody id="jobs"><tr><td colspan="5" class="empty">No job data loaded.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" data-page-panel="docker">
+        <section class="panel" data-admin-only>
+          <div class="panel-heading">
+            <div><p class="eyebrow">DOCKER</p><h2>Container updates</h2></div>
+            <button type="button" id="openContainerUpdates" class="secondary">Manage</button>
+          </div>
+          <p id="containerUpdatesSummary" class="form-note">Loading…</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">DOCKER</p><h2>All containers</h2></div>
+            <span class="panel-note">Across every device that reports Docker as available</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Device</th><th>Container</th><th>Image</th><th>State</th><th>Status</th><th>Ports</th><th>Controls</th></tr></thead>
+              <tbody id="dockerFleetTable"><tr><td colspan="7" class="empty">No containers reported yet.</td></tr></tbody>
             </table>
           </div>
         </section>
