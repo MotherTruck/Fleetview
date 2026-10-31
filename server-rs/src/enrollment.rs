@@ -161,10 +161,17 @@ async fn enroll(
     }
     tx.commit().await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "device_id": device_id, "agent_token": agent_token })),
-    ))
+    // Additive, never a precondition for enrollment -- see client_ca.rs.
+    // An agent that doesn't get a cert here (older server, or issuance
+    // simply failing) keeps working exactly as it always has, bearer
+    // token only.
+    let mut body = json!({ "device_id": device_id, "agent_token": agent_token });
+    if let Some(issued) = crate::client_ca::issue_for_device(&device_id) {
+        body["client_cert_pem"] = json!(issued.cert_pem);
+        body["client_key_pem"] = json!(issued.key_pem);
+    }
+
+    Ok((StatusCode::CREATED, Json(body)))
 }
 
 #[derive(Serialize)]

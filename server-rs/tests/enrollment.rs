@@ -92,6 +92,96 @@ async fn used_token_records_which_device_enrolled() {
 }
 
 #[tokio::test]
+async fn enroll_issues_a_client_cert_when_the_ca_directory_is_writable() {
+    let ca_dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start_with_env(&[(
+        "FLEETVIEW_CLIENT_CA_DIR",
+        ca_dir.path().to_string_lossy().to_string(),
+    )])
+    .await;
+    let (client, csrf) = setup_admin(&server).await;
+    let created = create_token(&client, &server, &csrf, Some("cert-test"), None).await;
+
+    let response = enroll(&server, created["token"].as_str().unwrap(), "cert-host").await;
+    assert_eq!(response.status(), 201);
+    let body: Value = response.json().await.unwrap();
+    assert!(body["client_cert_pem"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
+    assert!(body["client_key_pem"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn enroll_still_succeeds_without_a_cert_when_the_ca_directory_is_unwritable() {
+    // A directory can never be created *under a plain file* -- unlike a
+    // merely-missing parent, this fails even when the test process runs as
+    // root (as it does in CI), so it reliably reproduces "client CA
+    // unavailable" without depending on real filesystem permissions.
+    // Enrollment must still succeed, token-only, exactly as it did before
+    // this feature existed -- a client cert is additive and never a
+    // precondition.
+    let blocking_file = tempfile::NamedTempFile::new().unwrap();
+    let unusable_dir = blocking_file.path().join("client-ca");
+    let server = TestServer::start_with_env(&[(
+        "FLEETVIEW_CLIENT_CA_DIR",
+        unusable_dir.to_string_lossy().to_string(),
+    )])
+    .await;
+    let (client, csrf) = setup_admin(&server).await;
+    let created = create_token(&client, &server, &csrf, Some("no-cert-test"), None).await;
+
+    let response = enroll(&server, created["token"].as_str().unwrap(), "no-cert-host").await;
+    assert_eq!(response.status(), 201);
+    let body: Value = response.json().await.unwrap();
+    assert!(body["device_id"].as_str().is_some());
+    assert!(body["agent_token"].as_str().is_some());
+    assert!(body.get("client_cert_pem").is_none());
+}
+
+/// A device presenting a client certificate that names a *different*
+/// device than its X-Device-ID header must be rejected, even with a
+/// correct bearer token -- see auth.rs's authenticate_agent_with_cert.
+/// There's no real Caddy in this test harness, but Caddy's only job here
+/// is forwarding the verified cert subject as this exact header, so
+/// setting it directly exercises the same code path a real mismatched
+/// cert would hit in production.
+#[tokio::test]
+async fn a_client_cert_naming_a_different_device_is_rejected() {
+    let ca_dir = tempfile::tempdir().unwrap();
+    let server = TestServer::start_with_env(&[(
+        "FLEETVIEW_CLIENT_CA_DIR",
+        ca_dir.path().to_string_lossy().to_string(),
+    )])
+    .await;
+    let (client, csrf) = setup_admin(&server).await;
+    let created = create_token(&client, &server, &csrf, Some("mismatch-test"), None).await;
+    let enrolled = enroll(&server, created["token"].as_str().unwrap(), "mismatch-host").await;
+    let body: Value = enrolled.json().await.unwrap();
+    let device_id = body["device_id"].as_str().unwrap();
+    let agent_token = body["agent_token"].as_str().unwrap();
+
+    let agent = server.client();
+
+    let matching = agent
+        .get(server.url("/api/v1/agent/jobs/next"))
+        .header("X-Device-ID", device_id)
+        .header("Authorization", format!("Bearer {agent_token}"))
+        .header("X-FleetView-Client-Cert-Subject", format!("CN={device_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(matching.status(), 204, "a cert naming the same device must be accepted");
+
+    let mismatched = agent
+        .get(server.url("/api/v1/agent/jobs/next"))
+        .header("X-Device-ID", device_id)
+        .header("Authorization", format!("Bearer {agent_token}"))
+        .header("X-FleetView-Client-Cert-Subject", "CN=some-other-device")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mismatched.status(), 401, "a cert naming a different device must be rejected");
+}
+
+#[tokio::test]
 async fn unknown_token_is_rejected() {
     let server = TestServer::start().await;
     let response = enroll(&server, &format!("fv_{}", "x".repeat(43)), "intruder").await;

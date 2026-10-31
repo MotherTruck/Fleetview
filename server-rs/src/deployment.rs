@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use crate::auth::{authenticate_agent, Admin, Operator, Viewer};
+use crate::auth::{authenticate_agent_with_cert, cert_subject_device_id, Admin, Operator, Viewer};
 use crate::error::ApiError;
 use crate::models::Device;
 use crate::AppState;
@@ -838,8 +838,14 @@ async fn deploy_bundle(
     ))
 }
 
-async fn authorized_bundle_job(state: &AppState, device_id: &str, authorization: &str, job_id: &str) -> Result<String, ApiError> {
-    let device = authenticate_agent(state, device_id, authorization).await?;
+async fn authorized_bundle_job(
+    state: &AppState,
+    device_id: &str,
+    authorization: &str,
+    cert_subject: Option<&str>,
+    job_id: &str,
+) -> Result<String, ApiError> {
+    let device = authenticate_agent_with_cert(state, device_id, authorization, cert_subject).await?;
     let job = sqlx::query("SELECT device_id, type, status, options FROM jobs WHERE id = $1")
         .bind(job_id)
         .fetch_optional(&state.db)
@@ -869,7 +875,8 @@ async fn agent_bundle(
 ) -> Result<Json<BundleView>, ApiError> {
     let device_id = headers.get("x-device-id").and_then(|v| v.to_str().ok()).unwrap_or("");
     let authorization = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let package_id = authorized_bundle_job(&state, device_id, authorization, &job_id).await?;
+    let cert_subject = cert_subject_device_id(&headers);
+    let package_id = authorized_bundle_job(&state, device_id, authorization, cert_subject.as_deref(), &job_id).await?;
     Ok(Json(bundle_view(&state, &package_id).await?.unwrap()))
 }
 
@@ -880,7 +887,8 @@ async fn agent_bundle_file(
 ) -> Result<impl IntoResponse, ApiError> {
     let device_id = headers.get("x-device-id").and_then(|v| v.to_str().ok()).unwrap_or("");
     let authorization = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let package_id = authorized_bundle_job(&state, device_id, authorization, &job_id).await?;
+    let cert_subject = cert_subject_device_id(&headers);
+    let package_id = authorized_bundle_job(&state, device_id, authorization, cert_subject.as_deref(), &job_id).await?;
     let row = sqlx::query("SELECT package_id, content FROM custom_package_files WHERE id = $1")
         .bind(&file_id)
         .fetch_optional(&state.db)

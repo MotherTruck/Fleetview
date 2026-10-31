@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::auth::{authenticate_agent, Admin, Operator, Viewer};
+use crate::auth::{Admin, Operator, Viewer};
 use crate::error::ApiError;
 use crate::models::Device;
 use crate::security::verify_password;
@@ -78,7 +78,8 @@ fn header(headers: &HeaderMap, name: &str) -> String {
 async fn authenticate_from_headers(state: &AppState, headers: &HeaderMap) -> Result<Device, ApiError> {
     let device_id = header(headers, "x-device-id");
     let authorization = header(headers, "authorization");
-    authenticate_agent(state, &device_id, &authorization).await
+    let cert_subject = crate::auth::cert_subject_device_id(headers);
+    crate::auth::authenticate_agent_with_cert(state, &device_id, &authorization, cert_subject.as_deref()).await
 }
 
 // -- shared view helpers (device_view, job_view, public_agent_settings) --

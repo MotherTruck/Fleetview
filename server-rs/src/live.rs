@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::auth::{authenticate_agent, SESSION_COOKIE};
+use crate::auth::{authenticate_agent_with_cert, cert_subject_device_id, SESSION_COOKIE};
 use crate::models::{Device, User};
 use crate::security::token_hash;
 use crate::AppState;
@@ -404,7 +404,8 @@ async fn agent_live(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>, he
 async fn handle_agent_live(mut socket: WebSocket, state: Arc<AppState>, headers: HeaderMap) {
     let device_id = headers.get("x-device-id").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let authorization = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    let device = match authenticate_agent(&state, &device_id, &authorization).await {
+    let cert_subject = cert_subject_device_id(&headers);
+    let device = match authenticate_agent_with_cert(&state, &device_id, &authorization, cert_subject.as_deref()).await {
         Ok(device) => device,
         Err(_) => {
             reject(&mut socket, 4401, "Invalid agent credentials").await;

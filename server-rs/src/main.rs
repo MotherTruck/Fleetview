@@ -1,6 +1,7 @@
 mod accounts;
 mod alerting;
 mod auth;
+mod client_ca;
 mod connectors;
 mod container_updates;
 mod cve_enrichment;

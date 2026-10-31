@@ -189,12 +189,38 @@ impl FromRequestParts<Arc<AppState>> for Admin {
     }
 }
 
+/// The header Caddy's client_auth is configured to set from the verified
+/// client certificate's subject (see Caddyfile and client_ca.rs) --
+/// present only when the device presented a cert Caddy could verify
+/// against the client CA, so its mere absence is never an error: most
+/// devices (plain HTTP, or not yet re-enrolled since this feature shipped)
+/// simply won't have one, and nothing here requires they do.
+const CLIENT_CERT_SUBJECT_HEADER: &str = "x-fleetview-client-cert-subject";
+
+/// Pulls the device ID out of the Caddy-forwarded cert subject header, if
+/// present. The cert's whole Subject DN is just "CN=<device id>" (see
+/// client_ca.rs -- nothing else is ever set on it), so this is a plain
+/// prefix strip, not real DN parsing.
+pub fn cert_subject_device_id(headers: &axum::http::HeaderMap) -> Option<String> {
+    let raw = headers.get(CLIENT_CERT_SUBJECT_HEADER)?.to_str().ok()?;
+    let trimmed = raw.strip_prefix("CN=").unwrap_or(raw).trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// Mirrors auth.py's authenticate_agent: Bearer-token auth for the
-/// agent-facing endpoints (never a browser session).
-pub async fn authenticate_agent(
+/// agent-facing endpoints (never a browser session). `cert_subject` is the
+/// device ID Caddy says the client certificate on this connection belongs
+/// to (via cert_subject_device_id above) -- None whenever no cert was
+/// presented or verified, which is the common case and never itself a
+/// failure. When a cert *was* presented, though, it must name this same
+/// device: a bearer token alone is no longer enough to impersonate a
+/// different device over a connection authenticated with someone else's
+/// certificate.
+pub async fn authenticate_agent_with_cert(
     state: &AppState,
     device_id: &str,
     authorization: &str,
+    cert_subject: Option<&str>,
 ) -> Result<crate::models::Device, ApiError> {
     let unauthorized = || ApiError::new(StatusCode::UNAUTHORIZED, "Invalid agent credentials");
     let Some(token) = authorization.strip_prefix("Bearer ") else {
@@ -203,6 +229,11 @@ pub async fn authenticate_agent(
             "Missing agent token",
         ));
     };
+    if let Some(subject) = cert_subject {
+        if subject != device_id {
+            return Err(unauthorized());
+        }
+    }
     let supplied = token_hash(token.trim());
     let device = sqlx::query_as::<_, crate::models::Device>(
         "SELECT id, hostname, display_name, platform, os_name, os_version, architecture, \
