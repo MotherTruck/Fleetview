@@ -77,6 +77,12 @@ func dockerClient() *http.Client {
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return dialDockerPipe(ctx)
 		},
+		// Built fresh on every call (scans, volume checks, update checks,
+		// job actions); without this the kept-alive pipe connection, and
+		// the goroutine net/http runs for it, would never get closed once
+		// this transport goes out of scope (IdleConnTimeout defaults to no
+		// limit) -- a leaked connection and goroutine every scan cycle.
+		DisableKeepAlives: true,
 	}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	return client

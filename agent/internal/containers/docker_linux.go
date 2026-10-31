@@ -75,6 +75,15 @@ func dockerClient() *http.Client {
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "unix", dockerSocket)
 		},
+		// This transport is built fresh on every call (inventory scans,
+		// volume checks, update checks, and job actions all call
+		// dockerClient() independently). Without this, each one's
+		// kept-alive connection -- and the goroutine net/http runs for it
+		// -- would sit idle forever (Transport's IdleConnTimeout defaults
+		// to no limit), with nothing left referencing the transport to
+		// ever close it: a connection and a goroutine leaked every scan
+		// cycle for the life of the process.
+		DisableKeepAlives: true,
 	}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	return client
