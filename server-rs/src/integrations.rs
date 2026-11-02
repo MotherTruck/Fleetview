@@ -1,5 +1,5 @@
 //! Mirrors server/app/integrations.py: connections to external home-lab
-//! services (Proxmox, OPNsense), whose inventory is pulled in and shown
+//! services (Proxmox, OPNsense, Wazuh), whose inventory is pulled in and shown
 //! alongside FleetView's own fleet. Credentials are encrypted at rest
 //! (secrets_crypto.rs) and never returned by any endpoint here; every
 //! response is built through `IntegrationView`, which only ever carries the
@@ -35,6 +35,7 @@ fn required_credential_fields(kind: &str) -> Option<&'static [&'static str]> {
     match kind {
         "proxmox" => Some(crate::connectors::proxmox::REQUIRED_CREDENTIAL_FIELDS),
         "opnsense" => Some(crate::connectors::opnsense::REQUIRED_CREDENTIAL_FIELDS),
+        "wazuh" => Some(crate::connectors::wazuh::REQUIRED_CREDENTIAL_FIELDS),
         _ => None,
     }
 }
@@ -56,7 +57,7 @@ fn default_true() -> bool {
 
 impl IntegrationInput {
     fn validate_shape(&self) -> Result<(), ApiError> {
-        if !matches!(self.kind.as_str(), "proxmox" | "opnsense") {
+        if !matches!(self.kind.as_str(), "proxmox" | "opnsense" | "wazuh") {
             return Err(ApiError::bad_request(format!("Unsupported integration kind {:?}", self.kind)));
         }
         if self.name.is_empty() || self.name.len() > 255 {
@@ -178,6 +179,7 @@ async fn sync_integration(db: &PgPool, integration: &mut Integration) {
         let result = match integration.kind.as_str() {
             "proxmox" => crate::connectors::proxmox::fetch_inventory(&integration.base_url, &credentials, integration.verify_tls).await,
             "opnsense" => crate::connectors::opnsense::fetch_inventory(&integration.base_url, &credentials, integration.verify_tls).await,
+            "wazuh" => crate::connectors::wazuh::fetch_inventory(&integration.base_url, &credentials, integration.verify_tls).await,
             _ => unreachable!("checked by required_credential_fields above"),
         };
         match result {

@@ -943,6 +943,21 @@ function integrationSummary(item) {
       leases.slice(0, 25).map((lease) => `<tr><td>${escapeHtml(lease.ip || "")}</td><td><code>${escapeHtml(lease.mac || "")}</code></td><td>${escapeHtml(lease.hostname || "")}</td><td>${escapeHtml(lease.state || "")}</td></tr>`).join("")
     }</tbody></table></div>${leases.length > 25 ? `<p class="form-note">${leases.length - 25} more not shown.</p>` : ""}`;
   }
+  if (item.kind === "wazuh") {
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    if (!agents.length) return '<p class="form-note">No vulnerabilities reported by Wazuh.</p>';
+    const byHost = new Map(state.devices.map((d) => [String(d.hostname || "").split(".")[0].toLowerCase(), d]));
+    const sorted = [...agents].sort((a, b) => (b.severity_counts.CRITICAL - a.severity_counts.CRITICAL) || (b.severity_counts.HIGH - a.severity_counts.HIGH) || (b.total - a.total));
+    return `<div class="table-wrap"><table><thead><tr><th>Wazuh agent</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>FleetView device</th></tr></thead><tbody>${
+      sorted.slice(0, 25).map((agent) => {
+        const device = byHost.get(String(agent.name).split(".")[0].toLowerCase());
+        const top = (agent.findings || []).slice(0, 5).map((f) => `${f.id} ${f.package} ${f.version}`.trim()).join("\n");
+        return `<tr title="${escapeHtml(top)}"><td class="package-name">${escapeHtml(agent.name)}</td><td>${agent.severity_counts.CRITICAL}</td><td>${agent.severity_counts.HIGH}</td><td>${agent.severity_counts.MEDIUM}</td><td>${agent.severity_counts.LOW}</td><td>${device
+          ? `<button type="button" class="secondary" data-action="details" data-tab="overview" data-device-id="${escapeHtml(device.id)}">${escapeHtml(device.display_name || device.hostname)}</button>`
+          : '<span class="pill severity-unknown">Not enrolled</span>'}</td></tr>`;
+      }).join("")
+    }</tbody></table></div>${agents.length > 25 ? `<p class="form-note">${agents.length - 25} more agents not shown.</p>` : ""}`;
+  }
   return "";
 }
 
@@ -953,7 +968,7 @@ function renderIntegrations() {
     const statusPill = item.last_sync_error ? '<span class="pill failed">Sync failed</span>'
       : item.last_synced_at ? '<span class="pill succeeded">Synced</span>'
       : '<span class="pill pending">Never synced</span>';
-    const kindLabel = item.kind === "proxmox" ? "Proxmox VE" : item.kind === "opnsense" ? "OPNsense" : item.kind;
+    const kindLabel = item.kind === "proxmox" ? "Proxmox VE" : item.kind === "opnsense" ? "OPNsense" : item.kind === "wazuh" ? "Wazuh" : item.kind;
     return `<article class="inventory-card">
       <div class="device-top">
         <div><h3>${escapeHtml(item.name)}</h3><div class="device-subtitle">${escapeHtml(kindLabel)} · ${escapeHtml(item.base_url)}</div></div>
@@ -977,6 +992,7 @@ function resetIntegrationForm() {
   $("#integrationKind").value = "proxmox";
   $("#proxmoxCredentialFields").hidden = false;
   $("#opnsenseCredentialFields").hidden = true;
+  $("#wazuhCredentialFields").hidden = true;
   $("#integrationVerifyTls").checked = true;
   $("#integrationSubmit").textContent = "Add integration";
   $("#integrationCancelEdit").hidden = true;
@@ -992,6 +1008,9 @@ function startEditIntegration(id) {
   $("#integrationVerifyTls").checked = item.verify_tls;
   $("#proxmoxCredentialFields").hidden = item.kind !== "proxmox";
   $("#opnsenseCredentialFields").hidden = item.kind !== "opnsense";
+  $("#wazuhCredentialFields").hidden = item.kind !== "wazuh";
+  $("#wazuhUsername").value = "";
+  $("#wazuhPassword").value = "";
   $("#proxmoxTokenId").value = "";
   $("#proxmoxTokenSecret").value = "";
   $("#opnsenseApiKey").value = "";
@@ -1006,6 +1025,7 @@ $("#integrationKind").addEventListener("change", () => {
   const kind = $("#integrationKind").value;
   $("#proxmoxCredentialFields").hidden = kind !== "proxmox";
   $("#opnsenseCredentialFields").hidden = kind !== "opnsense";
+  $("#wazuhCredentialFields").hidden = kind !== "wazuh";
 });
 
 $("#integrationCancelEdit").addEventListener("click", resetIntegrationForm);
@@ -1016,6 +1036,8 @@ $("#integrationForm").addEventListener("submit", async (event) => {
   const kind = $("#integrationKind").value;
   const rawCredentials = kind === "proxmox"
     ? { token_id: $("#proxmoxTokenId").value.trim(), token_secret: $("#proxmoxTokenSecret").value }
+    : kind === "wazuh"
+    ? { username: $("#wazuhUsername").value.trim(), password: $("#wazuhPassword").value }
     : { api_key: $("#opnsenseApiKey").value.trim(), api_secret: $("#opnsenseApiSecret").value };
   // Blank fields mean "keep the existing credentials" on an edit; never send them as literal empty-string overwrites.
   const credentials = Object.fromEntries(Object.entries(rawCredentials).filter(([, value]) => value));

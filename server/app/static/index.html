@@ -497,6 +497,7 @@
               <select id="integrationKind" required>
                 <option value="proxmox">Proxmox VE</option>
                 <option value="opnsense">OPNsense</option>
+                <option value="wazuh">Wazuh (vulnerabilities, read-only)</option>
               </select>
             </label>
             <label>Label<input id="integrationName" type="text" maxlength="255" required placeholder="e.g. Home Proxmox"></label>
@@ -510,11 +511,15 @@
               <label>API key<input id="opnsenseApiKey" type="text" maxlength="255" autocomplete="off"></label>
               <label>API secret<input id="opnsenseApiSecret" type="password" maxlength="255" placeholder="Leave blank to keep current" autocomplete="off"></label>
             </div>
+            <div id="wazuhCredentialFields" class="settings-grid" hidden>
+              <label>Indexer username<input id="wazuhUsername" type="text" maxlength="255" autocomplete="off"></label>
+              <label>Indexer password<input id="wazuhPassword" type="password" maxlength="255" placeholder="Leave blank to keep current" autocomplete="off"></label>
+            </div>
             <div class="settings-actions">
               <button type="submit" id="integrationSubmit">Add integration</button>
               <button type="button" id="integrationCancelEdit" class="secondary" hidden>Cancel edit</button>
             </div>
-            <p class="form-note">Proxmox: Datacenter → Permissions → API Tokens (PVEAuditor role is enough to read inventory). OPNsense: System → Access → Users → generate an API key. Credentials are encrypted at rest and never shown again once saved. See <code>docs/INTEGRATIONS.md</code>.</p>
+            <p class="form-note">Proxmox: Datacenter → Permissions → API Tokens (PVEAuditor role is enough to read inventory). OPNsense: System → Access → Users → generate an API key. Wazuh: use the <em>indexer</em> URL (port 9200, Wazuh 4.8+) and a read-only user. Credentials are encrypted at rest and never shown again once saved. See <code>docs/INTEGRATIONS.md</code>.</p>
           </form>
         </section>
 

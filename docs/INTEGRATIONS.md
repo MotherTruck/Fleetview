@@ -1,4 +1,4 @@
-# Integrations: Proxmox and OPNsense
+# Integrations: Proxmox, OPNsense and Wazuh
 
 The **Integrations** tab (admin only) connects FleetView to other services
 already running in a home lab and pulls their inventory in alongside your
@@ -67,6 +67,33 @@ explicitly rather than silently showing nothing or wrong data. If you hit
 this, the fix is a small one in `server/app/connectors/opnsense.py`'s
 `fetch_dhcp_leases`; a real response body from your instance's
 `/api/dhcpv4/leases/searchLease` would be enough to adjust it.
+
+## 4. Wazuh (vulnerabilities, read-only)
+
+Shows what Wazuh's vulnerability detector has found, per Wazuh agent, next to
+your own fleet. FleetView only ever issues `_search` queries; nothing is
+written to Wazuh, and Wazuh findings are shown separately from FleetView's own
+scanner results (the two will not always agree).
+
+Requires **Wazuh 4.8+** with the vulnerability detector enabled. Since 4.8 the
+findings live in the Wazuh *indexer*, not the manager API, so:
+
+- **Base URL** is the indexer: `https://<host>:9200` (not the manager's port 55000).
+- Create a dedicated indexer user (Wazuh dashboard: **Indexer management →
+  Security**) with a role granting only `read` on `wazuh-states-vulnerabilities-*`.
+  Enter its username/password in FleetView.
+- The indexer uses a self-signed certificate by default, so you'll likely need
+  to uncheck **Verify TLS certificate**.
+
+Each agent row shows Critical/High/Medium/Low counts, links to the matching
+enrolled FleetView device (matched by hostname, ignoring the domain part), and
+hovering a row lists its top findings by score. Up to 500 agents are synced,
+with the 20 highest-scoring findings kept per agent.
+
+**A caveat:** this was written against the documented 4.8+ index fields but
+has not been run against a live Wazuh. If a sync fails, the error says why; a
+real `_search` response from `wazuh-states-vulnerabilities-*` would be enough
+to adjust `server-rs/src/connectors/wazuh.rs`.
 
 ## Notes
 
