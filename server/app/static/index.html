@@ -142,6 +142,20 @@
             </table>
           </div>
         </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">DOCKER</p><h2>All volumes</h2></div>
+            <button type="button" id="pruneAllVolumesButton" class="secondary">Prune all unused</button>
+          </div>
+          <p class="panel-note">Across every device that reports Docker as available -- a volume is only ever local to the device it's on, same as Docker itself sees it.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Device</th><th>Volume</th><th>Driver</th><th>Mountpoint</th><th>Created</th><th>Status</th><th>Controls</th></tr></thead>
+              <tbody id="dockerFleetVolumeTable"><tr><td colspan="7" class="empty">No volumes reported yet.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section class="page" data-page-panel="inventory">

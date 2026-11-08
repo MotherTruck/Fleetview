@@ -1311,6 +1311,32 @@ function renderDockerFleetTable() {
   table.innerHTML = rows.length ? rows.join("") : '<tr><td colspan="7" class="empty">No containers reported yet.</td></tr>';
 }
 
+function renderDockerFleetVolumesTable() {
+  const table = $("#dockerFleetVolumeTable");
+  if (!table) return;
+  const rows = [];
+  let unusedCount = 0;
+  for (const device of state.devices) {
+    const inventory = device.inventory || {};
+    if (!inventory.docker_available) continue;
+    const volumes = Array.isArray(inventory.docker_volumes) ? inventory.docker_volumes : [];
+    const versionParts = String(device.agent_version || "").split(".").map(Number);
+    const agentReady = versionParts[0] > 0 || versionParts[0] === 0 && versionParts[1] >= 31;
+    const canManage = state.user?.role !== "viewer" && agentReady && device.agent_settings?.docker_inventory_enabled !== false;
+    for (const volume of volumes) {
+      if (!volume.in_use) unusedCount += 1;
+      const controls = canManage && !volume.in_use
+        ? `<button type="button" class="danger" data-volume-remove="${escapeHtml(volume.name)}" data-device-id="${escapeHtml(device.id)}">Remove</button>`
+        : "—";
+      rows.push(`<tr><td>${escapeHtml(device.display_name || device.hostname)}</td><td class="package-name">${escapeHtml(volume.name)}</td><td>${escapeHtml(volume.driver || "Unknown")}</td><td class="truncate" title="${escapeHtml(volume.mountpoint || "")}">${escapeHtml(volume.mountpoint || "")}</td><td>${escapeHtml(fullDate(volume.created_at))}</td><td><span class="pill ${volume.in_use ? "succeeded" : "severity-medium"}">${volume.in_use ? "In use" : "Unused"}</span></td><td>${controls}</td></tr>`);
+    }
+  }
+  table.innerHTML = rows.length ? rows.join("") : '<tr><td colspan="7" class="empty">No volumes reported yet.</td></tr>';
+  const pruneButton = $("#pruneAllVolumesButton");
+  pruneButton.disabled = unusedCount === 0;
+  pruneButton.textContent = unusedCount > 0 ? `Prune all unused (${unusedCount})` : "Prune all unused";
+}
+
 function renderPatching() {
   const totals = state.devices.reduce((result, device) => {
     const severities = device.vulnerability_severity_counts || {};
@@ -2086,6 +2112,7 @@ function render() {
   renderDashboard();
   renderPatching();
   renderDockerFleetTable();
+  renderDockerFleetVolumesTable();
   renderInventory();
   renderDeploy();
   renderReports();
@@ -3090,6 +3117,48 @@ $("#dockerFleetTable").addEventListener("click", async event => {
     });
     showNotice(`Docker ${action} queued for ${container.name || container.id}. Check Jobs for the result.`);
   } catch (error) { dockerButton.disabled = false; showNotice(error.message, true); }
+});
+$("#dockerFleetVolumeTable").addEventListener("click", async event => {
+  const button = event.target.closest("[data-volume-remove]");
+  if (!button) return;
+  const device = state.devices.find(item => item.id === button.dataset.deviceId);
+  if (!device || state.user?.role === "viewer") return;
+  const name = button.dataset.volumeRemove;
+  if (!confirm(`Permanently delete the Docker volume "${name}" on ${device.display_name || device.hostname}?\n\nThis removes its data from disk and cannot be undone.`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({ type: "DOCKER_VOLUME_REMOVE", options: { name, confirmed: true } }),
+    });
+    showNotice(`Volume removal queued for ${name}. Check Jobs for the result.`);
+  } catch (error) { button.disabled = false; showNotice(error.message, true); }
+});
+$("#pruneAllVolumesButton").addEventListener("click", async () => {
+  if (state.user?.role === "viewer") return;
+  const targets = state.devices.filter((device) => {
+    const inventory = device.inventory || {};
+    if (!inventory.docker_available) return false;
+    const volumes = Array.isArray(inventory.docker_volumes) ? inventory.docker_volumes : [];
+    return volumes.some((v) => !v.in_use);
+  });
+  if (!targets.length) return;
+  const names = targets.map((d) => d.display_name || d.hostname).join(", ");
+  if (!confirm(`Permanently delete every unused Docker volume on ${targets.length} device${targets.length === 1 ? "" : "s"}?\n\n${names}\n\nThis removes their data from disk and cannot be undone.`)) return;
+  const button = $("#pruneAllVolumesButton");
+  button.disabled = true;
+  const results = await Promise.allSettled(targets.map((device) =>
+    api(`/api/v1/admin/devices/${device.id}/jobs`, {
+      method: "POST", body: JSON.stringify({ type: "DOCKER_VOLUME_PRUNE", options: { confirmed: true } }),
+    })
+  ));
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length) {
+    showNotice(`Volume prune queued for ${targets.length - failed.length} of ${targets.length} devices. ${failed.length} failed to queue.`, true);
+  } else {
+    showNotice(`Volume prune queued for ${targets.length} device${targets.length === 1 ? "" : "s"}. Check Jobs for the result.`);
+  }
+  button.disabled = false;
+  await refresh();
 });
 $("#dockerVolumeRows").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-volume-remove]");
