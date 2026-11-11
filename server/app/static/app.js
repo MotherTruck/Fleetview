@@ -905,12 +905,14 @@ function renderAgentVersionsTable() {
   const manifest = state.publishedAgentVersion;
   note.textContent = manifest ? `Server has agent ${manifest.version} published.` : "This server has no published agent binaries built in.";
   const devices = [...state.devices].sort((a, b) => (a.display_name || a.hostname).localeCompare(b.display_name || b.hostname));
+  let upgradableCount = 0;
   table.innerHTML = devices.length ? devices.map((device) => {
     const supportedPlatform = device.platform === "linux" || device.platform === "windows" || device.platform === "freebsd";
     const versionParts = String(device.agent_version || "").split(".").map(Number);
     const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
     const upToDate = manifest && device.agent_version === manifest.version;
     const canUpgrade = manifest && supportedPlatform && bootstrapped && !upToDate;
+    if (canUpgrade) upgradableCount += 1;
     const statusPill = !manifest ? '<span class="pill severity-unknown">Unknown</span>'
       : upToDate ? '<span class="pill succeeded">Up to date</span>'
       : !supportedPlatform ? '<span class="pill severity-unknown">Unsupported platform</span>'
@@ -925,6 +927,9 @@ function renderAgentVersionsTable() {
       <td>${canUpgrade ? `<button type="button" class="secondary" data-upgrade-agent="${escapeHtml(device.id)}">Upgrade</button>` : "—"}</td>
     </tr>`;
   }).join("") : '<tr><td colspan="6" class="empty">No enrolled devices.</td></tr>';
+  const upgradeAllButton = $("#upgradeAllAgentsButton");
+  upgradeAllButton.hidden = upgradableCount === 0;
+  upgradeAllButton.textContent = `Upgrade all (${upgradableCount})`;
 }
 
 async function upgradeAgentDevice(id, button) {
@@ -940,6 +945,31 @@ async function upgradeAgentDevice(id, button) {
     await refresh();
   } catch (error) { showNotice(error.message, true); }
   finally { if (button) button.disabled = false; }
+}
+
+async function upgradeAllAgents() {
+  const manifest = state.publishedAgentVersion;
+  if (!manifest) return;
+  const targets = state.devices.filter((device) => {
+    const supportedPlatform = device.platform === "linux" || device.platform === "windows" || device.platform === "freebsd";
+    const versionParts = String(device.agent_version || "").split(".").map(Number);
+    const bootstrapped = versionParts[0] > 0 || (versionParts[0] === 0 && versionParts[1] >= 16);
+    const upToDate = device.agent_version === manifest.version;
+    return supportedPlatform && bootstrapped && !upToDate;
+  });
+  if (!targets.length) return;
+  if (!confirm(`Upgrade the agent on all ${targets.length} outdated device${targets.length === 1 ? "" : "s"} to ${manifest.version}?\n\nEach agent downloads and verifies the new binary, then replaces itself. On Linux this happens in place with no restart; on Windows the service restarts briefly.`)) return;
+  const button = $("#upgradeAllAgentsButton");
+  button.disabled = true;
+  const results = await Promise.allSettled(targets.map((device) => api(`/api/v1/admin/devices/${device.id}/upgrade-agent`, { method: "POST" })));
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length) {
+    showNotice(`Agent upgrade queued for ${targets.length - failed.length} of ${targets.length} devices. ${failed.length} failed to queue.`, true);
+  } else {
+    showNotice(`Agent upgrade to ${manifest.version} queued for ${targets.length} device${targets.length === 1 ? "" : "s"}.`);
+  }
+  button.disabled = false;
+  await refresh();
 }
 
 function integrationSummary(item) {
@@ -2928,6 +2958,7 @@ $("#agentVersionsTable").addEventListener("click", (event) => {
   const button = event.target.closest("[data-upgrade-agent]");
   if (button) upgradeAgentDevice(button.dataset.upgradeAgent, button);
 });
+$("#upgradeAllAgentsButton").addEventListener("click", upgradeAllAgents);
 $("#trendFilters").addEventListener("submit", async event => {
   event.preventDefault();
   try {
