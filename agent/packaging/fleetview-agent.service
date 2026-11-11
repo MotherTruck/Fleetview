@@ -14,7 +14,6 @@ RestartSec=15s
 TimeoutStopSec=30s
 UMask=0077
 PrivateTmp=true
-ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -24,13 +23,18 @@ LockPersonality=true
 # setuid/setgid exec could grant), but free to set and closes the one case
 # it isn't -- a file capability on something RUN_COMMAND execs.
 NoNewPrivileges=true
-# Deliberately NOT adding ProtectSystem=strict, CapabilityBoundingSet, or
-# SystemCallFilter here, despite being standard hardening advice: this
+# Deliberately NOT adding ProtectSystem=strict, ProtectHome, CapabilityBoundingSet,
+# or SystemCallFilter here, despite being standard hardening advice: this
 # agent's actual job is running arbitrary admin-issued shell commands and
 # installing packages system-wide (RUN_COMMAND, INSTALL_PACKAGE, etc.) --
 # capabilities or a read-only filesystem would silently break legitimate
 # uses of those features rather than meaningfully containing a compromised
-# agent, which already has everything root has by design.
+# agent, which already has everything root has by design. ProtectHome in
+# particular used to be set here, and silently mounted an empty tmpfs over
+# /home, /root, and /run/user for this service -- invisible even to root --
+# which broke both the file browser and RUN_COMMAND for anything under
+# /home without ever surfacing an error, since an empty directory looks
+# exactly like one that's genuinely empty.
 
 [Install]
 WantedBy=multi-user.target
