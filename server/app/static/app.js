@@ -325,6 +325,9 @@ function connectFiles(deviceId, path = "") {
           }
         } else if (message.type === "files_write_result") {
           handleFilesWriteResult(message);
+        } else if (message.type === "files_delete_result") {
+          if (message.error) { showNotice(message.error, true); }
+          else { showNotice(`Deleted ${message.path}.`); requestFilesList(state.filesPath); }
         } else if (message.type === "files_closed") {
           $("#filesStatus").textContent = `Session ended: ${message.reason || "closed"}`;
         } else if (message.type === "error") {
@@ -342,6 +345,15 @@ function requestFilesList(path) {
   state.filesPath = path;
   $("#filesListing").innerHTML = '<tr><td colspan="4" class="empty">Loading…</td></tr>';
   state.filesSocket?.send({ type: "list", path });
+}
+
+function deleteFilesPath(path, isDir) {
+  if (!state.filesSocket) return;
+  const message = isDir
+    ? `Permanently delete the folder "${path}" and everything inside it?\n\nThis cannot be undone.`
+    : `Permanently delete the file "${path}"?\n\nThis cannot be undone.`;
+  if (!confirm(message)) return;
+  state.filesSocket.send({ type: "delete", path, recursive: isDir });
 }
 
 function disconnectFiles() {
@@ -371,14 +383,20 @@ function renderFilesListing(message) {
   $("#filesBreadcrumb").innerHTML = parent !== null
     ? `<button type="button" data-files-up>↑ Up</button> · ${escapeHtml(path)}`
     : escapeHtml(path);
+  // files_delete didn't exist before agent 0.33.0 -- an older agent simply
+  // won't recognize the message, so the button would just do nothing.
+  const deviceVersionParts = String(state.detailDevice?.agent_version || "").split(".").map(Number);
+  const deleteSupported = deviceVersionParts[0] > 0 || (deviceVersionParts[0] === 0 && deviceVersionParts[1] >= 33);
   const entries = message.entries || [];
   const rows = entries.map((entry) => {
     const fullPath = path.endsWith(separator) ? `${path}${entry.name}` : `${path}${separator}${entry.name}`;
     if (entry.is_dir) {
-      return `<tr data-files-dir="${escapeHtml(fullPath)}"><td class="package-name">📁 ${escapeHtml(entry.name)}</td><td>—</td><td>${escapeHtml(fullDate(entry.modified_at))}</td><td></td></tr>`;
+      const deleteButton = deleteSupported ? `<button type="button" class="danger" data-files-delete-dir="${escapeHtml(fullPath)}">Delete</button>` : "";
+      return `<tr data-files-dir="${escapeHtml(fullPath)}"><td class="package-name">📁 ${escapeHtml(entry.name)}</td><td>—</td><td>${escapeHtml(fullDate(entry.modified_at))}</td><td>${deleteButton}</td></tr>`;
     }
+    const deleteButton = deleteSupported ? `<button type="button" class="danger" data-files-delete="${escapeHtml(fullPath)}">Delete</button> ` : "";
     return `<tr><td>${escapeHtml(entry.name)}</td><td>${formatBytes(entry.size)}</td><td>${escapeHtml(fullDate(entry.modified_at))}</td>` +
-      `<td><button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button> ` +
+      `<td>${deleteButton}<button type="button" class="secondary" data-files-download="${escapeHtml(fullPath)}">Download</button> ` +
       `<button type="button" class="secondary" data-files-edit="${escapeHtml(fullPath)}">Edit</button> ` +
       `<button type="button" class="secondary" data-files-send="${escapeHtml(fullPath)}">Send to device</button></td></tr>`;
   }).join("");
@@ -3684,6 +3702,14 @@ $("#deviceDialog").addEventListener("click", async (event) => {
 $("#detailFiles").addEventListener("click", (event) => {
   const up = event.target.closest("[data-files-up]");
   if (up) { requestFilesList(filesParentPath(state.filesPath, state.filesPath.includes("\\") && !state.filesPath.includes("/") ? "\\" : "/")); return; }
+  // Checked before the generic directory-row click below: a Delete button
+  // inside a directory row's <tr data-files-dir> would otherwise also
+  // match that row's own closest("[data-files-dir]") and just navigate
+  // into the folder instead of deleting it.
+  const deleteDir = event.target.closest("[data-files-delete-dir]");
+  if (deleteDir) { deleteFilesPath(deleteDir.dataset.filesDeleteDir, true); return; }
+  const deleteFile = event.target.closest("[data-files-delete]");
+  if (deleteFile) { deleteFilesPath(deleteFile.dataset.filesDelete, false); return; }
   const dir = event.target.closest("[data-files-dir]");
   if (dir) { requestFilesList(dir.dataset.filesDir); return; }
   const download = event.target.closest("[data-files-download]");

@@ -61,6 +61,13 @@ type filesWriteResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type filesDeleteResult struct {
+	Type    string `json:"type"`
+	Session string `json:"session"`
+	Path    string `json:"path"`
+	Error   string `json:"error,omitempty"`
+}
+
 // maxListEntries caps a single directory listing so a pathological
 // directory (e.g. a huge cache or /proc) can't blow up the live channel's
 // write queue or the dashboard's rendering.
@@ -184,6 +191,36 @@ func (f *filesHandler) write(session, path, dataB64 string) {
 		return
 	}
 	f.send(filesWriteResult{Type: "files_write_result", Session: session, Path: path, Size: int64(len(data))})
+}
+
+// delete removes a file or, when recursive is set, an entire directory tree
+// -- the same operation the dashboard's Terminal tab already lets an admin
+// run as `rm` / `rm -rf`, just one click instead of a typed command (see
+// this file's own leading comment on why that's not a new privilege). A
+// non-recursive request against a non-empty directory fails with the
+// OS's own "directory not empty" error rather than silently doing nothing
+// or silently recursing, so an accidental click on a populated folder never
+// wipes more than the single, empty target the dashboard showed.
+func (f *filesHandler) delete(session, path string, recursive bool) {
+	if path == "" {
+		f.send(filesDeleteResult{Type: "files_delete_result", Session: session, Path: path, Error: "no path given"})
+		return
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		f.send(filesDeleteResult{Type: "files_delete_result", Session: session, Path: path, Error: err.Error()})
+		return
+	}
+	if info.IsDir() && recursive {
+		err = os.RemoveAll(path)
+	} else {
+		err = os.Remove(path)
+	}
+	if err != nil {
+		f.send(filesDeleteResult{Type: "files_delete_result", Session: session, Path: path, Error: err.Error()})
+		return
+	}
+	f.send(filesDeleteResult{Type: "files_delete_result", Session: session, Path: path})
 }
 
 // defaultRoot is used when the dashboard asks for an empty path (the

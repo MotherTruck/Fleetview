@@ -74,21 +74,22 @@ type liveMetricsMessage struct {
 }
 
 type inboundMessage struct {
-	Type    string  `json:"type"`
-	Session string  `json:"session"`
-	Cols    int     `json:"cols"`
-	Rows    int     `json:"rows"`
-	Data    string  `json:"data"`
-	Code    int     `json:"code"`
-	Reason  string  `json:"reason"`
-	X       float64 `json:"x"`
-	Y       float64 `json:"y"`
-	Button  string  `json:"button"`
-	Pressed bool    `json:"pressed"`
-	DeltaX  float64 `json:"dx"`
-	DeltaY  float64 `json:"dy"`
-	Key     string  `json:"key"`
-	Path    string  `json:"path"`
+	Type      string  `json:"type"`
+	Session   string  `json:"session"`
+	Cols      int     `json:"cols"`
+	Rows      int     `json:"rows"`
+	Data      string  `json:"data"`
+	Code      int     `json:"code"`
+	Reason    string  `json:"reason"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Button    string  `json:"button"`
+	Pressed   bool    `json:"pressed"`
+	DeltaX    float64 `json:"dx"`
+	DeltaY    float64 `json:"dy"`
+	Key       string  `json:"key"`
+	Path      string  `json:"path"`
+	Recursive bool    `json:"recursive"`
 }
 
 // Run dials the server's live endpoint and keeps it connected until ctx is
@@ -295,6 +296,8 @@ func readLoop(ctx context.Context, conn *websocket.Conn, term *terminalHandler, 
 			go files.read(message.Session, message.Path)
 		case "files_write":
 			go files.write(message.Session, message.Path, message.Data)
+		case "files_delete":
+			go files.delete(message.Session, message.Path, message.Recursive)
 		}
 	}
 }

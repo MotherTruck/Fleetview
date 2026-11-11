@@ -452,7 +452,7 @@ async fn handle_agent_live(mut socket: WebSocket, state: Arc<AppState>, headers:
                             state.hub.send_to_screen_viewer(&device.id, session, message.clone());
                         }
                     }
-                    "files_list_result" | "files_read_result" | "files_write_result" => {
+                    "files_list_result" | "files_read_result" | "files_write_result" | "files_delete_result" => {
                         if let Some(session) = message.get("session").and_then(Value::as_str) {
                             state.hub.send_to_files_viewer(&device.id, session, message.clone());
                         }
@@ -834,6 +834,23 @@ async fn handle_browser_files_live(mut socket: WebSocket, state: Arc<AppState>, 
                         if !path.is_empty() && !data.is_empty() {
                             record_audit(&state, &user.username, "files_write", &device.hostname, path).await;
                             state.hub.send_to_agent(&device_id, json!({"type": "files_write", "session": session_id, "path": path, "data": data}));
+                        }
+                    }
+                    "delete" => {
+                        let recursive = message.get("recursive").and_then(Value::as_bool).unwrap_or(false);
+                        if !path.is_empty() {
+                            record_audit(
+                                &state,
+                                &user.username,
+                                "files_delete",
+                                &device.hostname,
+                                &format!("{path}{}", if recursive { " (recursive)" } else { "" }),
+                            )
+                            .await;
+                            state.hub.send_to_agent(
+                                &device_id,
+                                json!({"type": "files_delete", "session": session_id, "path": path, "recursive": recursive}),
+                            );
                         }
                     }
                     _ => {}
