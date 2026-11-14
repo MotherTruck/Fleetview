@@ -32,7 +32,17 @@ temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT
 
 fetch -o "$temporary_directory/manifest.json" "${server_url}/install/agent-version"
-expected_sha="$(sed -n 's/.*"freebsd_amd64":{"sha256":"\([0-9a-f]*\)".*/\1/p' "$temporary_directory/manifest.json")"
+# Pulled in two passes rather than one combined pattern: the server
+# re-serializes this JSON (deployment.rs's published_agent_manifest parses
+# the on-disk manifest and serves it back out as a serde_json::Value),
+# which sorts object keys alphabetically -- "path" before "sha256" -- so a
+# pattern assuming "sha256" comes immediately after "freebsd_amd64":{ (as
+# the file on disk itself happens to have it) stopped matching the moment
+# that round trip reordered them, and always reported no FreeBSD build at
+# all. Isolating the freebsd_amd64 object's own text first, then searching
+# within just that for sha256, works regardless of which field comes first.
+freebsd_block="$(sed -n 's/.*"freebsd_amd64":{\([^}]*\)}.*/\1/p' "$temporary_directory/manifest.json")"
+expected_sha="$(printf '%s' "$freebsd_block" | sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p')"
 if [ -z "$expected_sha" ]; then
 	echo "Server did not publish a FreeBSD agent build (it may be an older FleetView version); refusing to install." >&2
 	exit 1
