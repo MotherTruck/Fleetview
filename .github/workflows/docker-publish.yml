@@ -8,10 +8,21 @@ on:
       - server/**
       - server-rs/**
       - agent/**
+      # Every script server/Dockerfile actually COPYs into the image --
+      # keep this list in sync with that file's COPY lines, not just
+      # whichever scripts happened to need a fix when each one was added:
+      # a change here with no matching entry silently never gets built or
+      # published at all (confirmed the hard way -- see install-agent-
+      # opnsense.sh's sha256/path-ordering fix, pushed as its own commit
+      # that triggered no run whatsoever until this list was corrected).
       - scripts/uninstall-agent.sh
       - scripts/install-agent.ps1
       - scripts/uninstall-agent.ps1
       - scripts/remote-install-linux.sh
+      - scripts/upgrade-agent-in-place.sh
+      - scripts/upgrade-agent-in-place.ps1
+      - scripts/install-agent-opnsense.sh
+      - scripts/uninstall-agent-opnsense.sh
       - .github/workflows/docker-publish.yml
   workflow_dispatch: {}
 
