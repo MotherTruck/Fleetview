@@ -16,8 +16,10 @@ set -e
 
 server_url="${1:-}"
 enrollment_token="${2:-}"
+allow_plaintext_arg="${3:-}"
 if [ -z "$server_url" ] || [ -z "$enrollment_token" ]; then
 	echo "Usage: $0 SERVER_URL ENROLLMENT_TOKEN" >&2
+	echo "       $0 SERVER_URL ENROLLMENT_TOKEN --allow-plaintext   (http:// to a non-local address -- not recommended)" >&2
 	exit 2
 fi
 if [ "$(id -u)" -ne 0 ]; then
@@ -25,6 +27,28 @@ if [ "$(id -u)" -ne 0 ]; then
 	exit 1
 fi
 server_url="${server_url%/}"
+# Mirrors config.Load's own refusal (agent/internal/config/config.go) and
+# remote-install-linux.sh/install-agent.ps1's matching installer-side
+# check -- this script was the one place that never got this check at
+# all, so it installed successfully against plain HTTP and then
+# crash-looped the moment the agent itself started and refused to run.
+# http://<loopback> is exempt, same as the agent's own check.
+case "$server_url" in
+	http://*)
+		plaintext_host="${server_url#http://}"
+		plaintext_host="${plaintext_host%%/*}"
+		plaintext_host="${plaintext_host%%:*}"
+		case "$plaintext_host" in
+			127.0.0.1|localhost|::1|\[::1\]) : ;; # loopback, no opt-in needed
+			*)
+				if [ "$allow_plaintext_arg" != "--allow-plaintext" ]; then
+					echo "SERVER_URL ($server_url) is plain HTTP to a non-local address -- this would send the agent's credentials and every job result in clear text. Use an https:// URL instead (see docs/TLS.md), or pass --allow-plaintext to proceed anyway if you understand the risk." >&2
+					exit 2
+				fi
+				;;
+		esac
+		;;
+esac
 
 install -d -m 700 /usr/local/etc/fleetview-agent /var/db/fleetview-agent
 
@@ -72,6 +96,9 @@ trap 'rm -rf "$temporary_directory"; rm -f "$config_file"' EXIT
 	printf 'FLEETVIEW_JOB_POLL_SECONDS=10\n'
 	printf 'FLEETVIEW_REQUEST_TIMEOUT_SECONDS=60\n'
 	printf 'FLEETVIEW_ALLOW_INSECURE_TLS=false\n'
+	if [ "$allow_plaintext_arg" = "--allow-plaintext" ]; then
+		printf 'FLEETVIEW_ALLOW_PLAINTEXT=true\n'
+	fi
 } > "$config_file"
 install -m 600 "$config_file" /usr/local/etc/fleetview-agent/agent.env
 

@@ -1240,9 +1240,11 @@ function renderInstallCommand() {
       // Windows installer uses, rather than compiling from source like
       // the Linux installer does.
       const installerURL = `${serverURL}/install/opnsense.sh`;
-      $("#installCommand").textContent = `fetch -o /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(installerURL)} && sh /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`;
+      $("#installCommand").textContent = `fetch -o /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(installerURL)} && sh /tmp/install-fleetview-agent-opnsense.sh ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
+        + (isHttpNonLoopback ? ` --allow-plaintext` : "");
       $("#installCommandIntro").textContent = "Run this command from the OPNsense console or an SSH session (as root):";
-      $("#installCommandNote").textContent = "Downloads the prebuilt FreeBSD agent binary, verifies its checksum, and starts it as an rc.d service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page.";
+      $("#installCommandNote").textContent = "Downloads the prebuilt FreeBSD agent binary, verifies its checksum, and starts it as an rc.d service. Each token enrolls exactly one device and then stops working. The token is shown only here and only once, so copy the command before leaving this page."
+        + (isHttpNonLoopback ? " This server is plain HTTP, so the command includes --allow-plaintext -- traffic to it will be unencrypted. See docs/TLS.md to enable TLS instead." : "");
     } else {
       const installerURL = `${serverURL}/install/linux.sh`;
       $("#installCommand").textContent = `curl -fsSL ${shellQuote(installerURL)} | sudo bash -s -- ${shellQuote(serverURL)} ${shellQuote(fresh.token)}`
